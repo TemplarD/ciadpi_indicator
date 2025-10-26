@@ -17,7 +17,7 @@ Complete DPI bypass solution with system tray indicator. Includes byedpi and man
 ## Quick Install
 
 ```bash
-wget -O install_ciadpi.sh https://raw.githubusercontent.com/templard/ciadpi-complete/main/install_ciadpi_complete.sh
+wget -O install_ciadpi.sh https://raw.githubusercontent.com/templard/ciadpi_indicator/master/install_ciadpi_complete.sh
 chmod +x install_ciadpi.sh
 ./install_ciadpi.sh
 ```
