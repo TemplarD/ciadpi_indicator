@@ -1,0 +1,18 @@
+[Unit]
+Description=CIADPI DPI Bypass Service
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=%h/byedpi/
+ExecStart=%h/byedpi/ciadpi -o1 -o25+s -T3 -At o--tlsrec 1+s
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
