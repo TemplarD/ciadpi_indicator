@@ -62,7 +62,7 @@ Other systemd-based distributions
 MIT License
 
 ## 5. Структура репозитория:
-
+```
 ciadpi-complete/
 ├── README.md
 ├── install_ciadpi_complete.sh
@@ -74,3 +74,4 @@ ciadpi-complete/
 ├── ciadpi_launcher.sh
 └── assets/
     └── (screenshots, etc.)
+```
