@@ -149,13 +149,16 @@ journalctl -u ciadpi.service -f
 
 #### License
 
-MIT License
+![License](https://img.shields.io/badge/License-MIT-blue.svg) MIT License
 
 #### Repository Structure
 
 ```
 ciadpi-complete/
 ├── README.md
+├── LICENSE
+├── diagnose_ciadpi.py
+├── ciadpi_whitelist.py
 ├── install_ciadpi_complete.sh
 ├── uninstall_ciadpi_complete.sh
 ├── ciadpi.service
