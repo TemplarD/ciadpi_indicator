@@ -80,6 +80,7 @@ class AdvancedTrayIndicator:
         self.current_params = self.load_config()
         self.whitelist_file = Path.home() / '.config' / 'ciadpi' / 'whitelist.json'
         self.whitelist = self.load_whitelist()
+        self.auto_disable_proxy = False
 
         if WHITELIST_AVAILABLE:
             self.whitelist_manager = WhitelistManager()
@@ -175,7 +176,8 @@ class AdvancedTrayIndicator:
             "proxy_enabled": False,
             "proxy_host": "127.0.0.1",
             "proxy_port": "1080",
-            "current_params": self.default_params
+            "current_params": self.default_params,
+            "auto_disable_proxy": False 
         }
         
         try:
@@ -597,7 +599,35 @@ class AdvancedTrayIndicator:
                 'NO_PROXY': ','.join(self.whitelist.get("domains", []) + self.whitelist.get("ips", []))
             }
         
-        return env_vars        
+        return env_vars      
+
+    # МЕТОД для отключения прокси
+    def disable_system_proxy(self):
+        """Полное отключение системного прокси"""
+        try:
+            print("🔌 Отключаем системный прокси...")
+            
+            # Отключаем через gsettings
+            subprocess.run([
+                'gsettings', 'set', 'org.gnome.system.proxy', 'mode', 'none'
+            ], check=False)
+            
+            # Очищаем переменные окружения
+            env_file = Path.home() / '.proxy_env'
+            if env_file.exists():
+                env_file.unlink()
+                
+            # Очищаем игнорируемые хосты
+            subprocess.run([
+                'gsettings', 'reset', 'org.gnome.system.proxy', 'ignore-hosts'
+            ], check=False)
+            
+            print("✅ Системный прокси отключен")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Ошибка отключения прокси: {e}")
+            return False      
 
     def create_menu(self):
         menu = Gtk.Menu()
@@ -811,7 +841,14 @@ class AdvancedTrayIndicator:
         current_port_display = current_settings.get('http_port', 'не указан')
         status_label = Gtk.Label(label=f"Текущий режим: {current_settings.get('mode', 'неизвестно')}\nХост: {current_host_display}, Порт: {current_port_display}")
         status_label.set_sensitive(False)
+
+        # ЧЕКБОКС для автоматического отключения прокси
+        auto_disable_check = Gtk.CheckButton(label="❌ Автоматически отключать прокси при выходе")
+        auto_disable_check.set_active(self.current_params.get("auto_disable_proxy", False))
+        auto_disable_check.set_tooltip_text("При остановке сервиса прокси будет автоматически отключен в системе")
         
+        # Добавляем в UI
+        box.pack_start(auto_disable_check, False, False, 0)                
         box.pack_start(mode_label, False, False, 0)
         box.pack_start(mode_combo, False, False, 0)
         box.pack_start(manual_frame, False, False, 0)
@@ -827,6 +864,10 @@ class AdvancedTrayIndicator:
             mode_index = mode_combo.get_active()
             modes = ['auto', 'manual', 'none']
             selected_mode = modes[mode_index] if mode_index >= 0 else 'none'
+
+            # Сохраняем настройку автоматического отключения
+            self.current_params["auto_disable_proxy"] = auto_disable_check.get_active()
+            self.save_config()            
             
             # Получаем хост и порт
             proxy_host = host_entry.get_text().strip()
@@ -1102,7 +1143,35 @@ class AdvancedTrayIndicator:
         self.run_command("systemctl start ciadpi.service")
 
     def stop_service(self, widget):
-        self.run_command("systemctl stop ciadpi.service")
+        """Остановка сервиса с опциональным отключением прокси"""
+        if self.current_params.get("auto_disable_proxy", False):
+            # Сначала отключаем прокси, потом останавливаем сервис
+            def stop_with_proxy_disable():
+                try:
+                    # Отключаем прокси
+                    self.disable_system_proxy()
+                    
+                    # Останавливаем сервис
+                    result = subprocess.run(
+                        ['sudo', 'systemctl', 'stop', 'ciadpi.service'],
+                        capture_output=True, text=True, timeout=10
+                    )
+                    
+                    if result.returncode == 0:
+                        self.show_notification("Сервис остановлен", "Прокси автоматически отключен")
+                    else:
+                        self.show_notification("Ошибка", result.stderr)
+                        
+                    time.sleep(1)
+                    self.update_status()
+                    
+                except Exception as e:
+                    self.show_notification("Ошибка", str(e))
+            
+            threading.Thread(target=stop_with_proxy_disable, daemon=True).start()
+        else:
+            # Обычная остановка без отключения прокси
+            self.run_command("systemctl stop ciadpi.service")
 
     def restart_service(self, widget):
         self.run_command("systemctl restart ciadpi.service")
@@ -1474,8 +1543,30 @@ class AdvancedTrayIndicator:
             pass
 
     def exit_app(self, widget):
+        """Выход из приложения с опциональным отключением прокси"""
+        if self.current_params.get("auto_disable_proxy", False):
+            # Проверяем статус сервиса - если запущен, не отключаем прокси
+            try:
+                result = subprocess.run(
+                    ['systemctl', 'is-active', 'ciadpi.service'],
+                    capture_output=True, text=True, timeout=2
+                )
+                service_running = result.stdout.strip() == 'active'
+                
+                if not service_running:
+                    # Сервис не запущен - отключаем прокси при выходе
+                    self.disable_system_proxy()
+                    self.show_notification("Выход", "Прокси отключен (сервис остановлен)")
+                else:
+                    print("⚠️ Сервис запущен - прокси не отключаем")
+                    
+            except Exception as e:
+                print(f"⚠️ Не удалось проверить статус сервиса: {e}")
+        
+        # Останавливаем автопоиск если активен
         if hasattr(self, 'is_searching') and self.is_searching:
             self.stop_autosearch()
+            
         Gtk.main_quit()
 
 if __name__ == "__main__":
