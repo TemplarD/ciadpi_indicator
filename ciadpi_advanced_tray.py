@@ -411,128 +411,137 @@ class AdvancedTrayIndicator:
         return False
 
     def show_whitelist_dialog(self, widget=None):
-        """Диалог управления белым списком"""
-        dialog = Gtk.Dialog(title="Управление белым списком", flags=0)
-        dialog.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
-                        Gtk.STOCK_OK, Gtk.ResponseType.OK)
-        dialog.set_default_size(600, 500)
+        ###
+        print("DEBUG: show_whitelist_dialog called")
+        try:        
+            ###
+            """Диалог управления белым списком"""
+            dialog = Gtk.Dialog(title="Управление белым списком", flags=0)
+            dialog.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
+                            Gtk.STOCK_OK, Gtk.ResponseType.OK)
+            dialog.set_default_size(600, 500)
 
-        content_area = dialog.get_content_area()
-        
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        box.set_margin_top(10)
-        box.set_margin_bottom(10)
-        box.set_margin_start(10)
-        box.set_margin_end(10)
-        
-        # Включение белого списка
-        enable_check = Gtk.CheckButton(label="Включить белый список")
-        enable_check.set_active(self.whitelist.get("enabled", False))
-        
-        # Настройки исключений
-        exceptions_frame = Gtk.Frame(label="Исключения из проксирования")
-        exceptions_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
-        exceptions_box.set_margin_top(5)
-        exceptions_box.set_margin_bottom(5)
-        exceptions_box.set_margin_start(5)
-        exceptions_box.set_margin_end(5)
-        
-        bypass_proxy_check = Gtk.CheckButton(label="Исключить из проксирования")
-        bypass_proxy_check.set_active(self.whitelist.get("bypass_proxy", True))
-        
-        bypass_dpi_check = Gtk.CheckButton(label="Исключить из DPI обхода")
-        bypass_dpi_check.set_active(self.whitelist.get("bypass_dpi", False))
-        bypass_dpi_check.set_sensitive(False)  # Пока не реализовано
-        
-        exceptions_box.pack_start(bypass_proxy_check, False, False, 0)
-        exceptions_box.pack_start(bypass_dpi_check, False, False, 0)
-        exceptions_frame.add(exceptions_box)
-        
-        # Домены
-        domains_frame = Gtk.Frame(label="Домены и хосты (по одному на строку)")
-        domains_scroll = Gtk.ScrolledWindow()
-        domains_scroll.set_min_content_height(150)
-        
-        domains_text = Gtk.TextView()
-        domains_text.set_wrap_mode(Gtk.WrapMode.WORD)
-        domains_buffer = domains_text.get_buffer()
-        
-        # Загружаем текущие домены
-        domains_text = "\n".join(self.whitelist.get("domains", []))
-        domains_buffer.set_text(domains_text)
-        
-        domains_scroll.add(domains_text)
-        domains_frame.add(domains_scroll)
-        
-        # IP-адреса
-        ips_frame = Gtk.Frame(label="IP-адреса и сети CIDR (по одному на строку)")
-        ips_scroll = Gtk.ScrolledWindow()
-        ips_scroll.set_min_content_height(100)
-        
-        ips_text = Gtk.TextView()
-        ips_text.set_wrap_mode(Gtk.WrapMode.WORD)
-        ips_buffer = ips_text.get_buffer()
-        
-        # Загружаем текущие IP
-        ips_text = "\n".join(self.whitelist.get("ips", []))
-        ips_buffer.set_text(ips_text)
-        
-        ips_scroll.add(ips_text)
-        ips_frame.add(ips_scroll)
-        
-        # Информация
-        info_label = Gtk.Label()
-        info_label.set_markup(
-            "<small>Подсказки:\n"
-            "• <tt>example.com</tt> - точное совпадение\n"
-            "• <tt>*.example.com</tt> - все поддомены\n" 
-            "• <tt>192.168.1.0/24</tt> - подсеть CIDR\n"
-            "• <tt>localhost</tt>, <tt>127.0.0.1</tt> - локальные адреса</small>"
-        )
-        info_label.set_sensitive(False)
-        
-        box.pack_start(enable_check, False, False, 0)
-        box.pack_start(exceptions_frame, False, False, 0)
-        box.pack_start(domains_frame, True, True, 0)
-        box.pack_start(ips_frame, True, True, 0)
-        box.pack_start(info_label, False, False, 0)
-        
-        content_area.pack_start(box, True, True, 0)
-        content_area.show_all()
-        
-        response = dialog.run()
-        
-        if response == Gtk.ResponseType.OK:
-            # Сохраняем настройки
-            self.whitelist["enabled"] = enable_check.get_active()
-            self.whitelist["bypass_proxy"] = bypass_proxy_check.get_active()
-            self.whitelist["bypass_dpi"] = bypass_dpi_check.get_active()
+            content_area = dialog.get_content_area()
             
-            # Сохраняем домены
-            domains_start, domains_end = domains_buffer.get_bounds()
-            domains_text = domains_buffer.get_text(domains_start, domains_end, True)
-            self.whitelist["domains"] = [
-                domain.strip() for domain in domains_text.split('\n') 
-                if domain.strip()
-            ]
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+            box.set_margin_top(10)
+            box.set_margin_bottom(10)
+            box.set_margin_start(10)
+            box.set_margin_end(10)
             
-            # Сохраняем IP
-            ips_start, ips_end = ips_buffer.get_bounds()
-            ips_text = ips_buffer.get_text(ips_start, ips_end, True)
-            self.whitelist["ips"] = [
-                ip.strip() for ip in ips_text.split('\n') 
-                if ip.strip()
-            ]
+            # Включение белого списка
+            enable_check = Gtk.CheckButton(label="Включить белый список")
+            enable_check.set_active(self.whitelist.get("enabled", False))
             
-            if self.save_whitelist():
-                self.show_notification("Белый список", "Настройки сохранены")
+            # Настройки исключений
+            exceptions_frame = Gtk.Frame(label="Исключения из проксирования")
+            exceptions_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
+            exceptions_box.set_margin_top(5)
+            exceptions_box.set_margin_bottom(5)
+            exceptions_box.set_margin_start(5)
+            exceptions_box.set_margin_end(5)
+            
+            bypass_proxy_check = Gtk.CheckButton(label="Исключить из проксирования")
+            bypass_proxy_check.set_active(self.whitelist.get("bypass_proxy", True))
+            
+            bypass_dpi_check = Gtk.CheckButton(label="Исключить из DPI обхода")
+            bypass_dpi_check.set_active(self.whitelist.get("bypass_dpi", False))
+            bypass_dpi_check.set_sensitive(False)  # Пока не реализовано
+            
+            exceptions_box.pack_start(bypass_proxy_check, False, False, 0)
+            exceptions_box.pack_start(bypass_dpi_check, False, False, 0)
+            exceptions_frame.add(exceptions_box)
+            
+            # Домены
+            domains_frame = Gtk.Frame(label="Домены и хосты (по одному на строку)")
+            domains_scroll = Gtk.ScrolledWindow()
+            domains_scroll.set_min_content_height(150)
+            
+            domains_text_view = Gtk.TextView()
+            domains_text_view.set_wrap_mode(Gtk.WrapMode.WORD)
+            domains_buffer = domains_text_view.get_buffer()
+            
+            # Загружаем текущие домены
+            domains_text = "\n".join(self.whitelist.get("domains", []))
+            domains_buffer.set_text(domains_text)
+            
+            domains_scroll.add(domains_text_view)
+            domains_frame.add(domains_scroll)
+            
+            # IP-адреса
+            ips_frame = Gtk.Frame(label="IP-адреса и сети CIDR (по одному на строку)")
+            ips_scroll = Gtk.ScrolledWindow()
+            ips_scroll.set_min_content_height(100)
+            
+            ips_text_view = Gtk.TextView()
+            ips_text_view.set_wrap_mode(Gtk.WrapMode.WORD)
+            ips_buffer = ips_text_view.get_buffer()
+            
+            # Загружаем текущие IP
+            ips_text = "\n".join(self.whitelist.get("ips", []))
+            ips_buffer.set_text(ips_text)
+            
+            ips_scroll.add(ips_text_view)
+            ips_frame.add(ips_scroll)
+            
+            # Информация
+            info_label = Gtk.Label()
+            info_label.set_markup(
+                "<small>Подсказки:\n"
+                "• <tt>example.com</tt> - точное совпадение\n"
+                "• <tt>*.example.com</tt> - все поддомены\n" 
+                "• <tt>192.168.1.0/24</tt> - подсеть CIDR\n"
+                "• <tt>localhost</tt>, <tt>127.0.0.1</tt> - локальные адреса</small>"
+            )
+            info_label.set_sensitive(False)
+            
+            box.pack_start(enable_check, False, False, 0)
+            box.pack_start(exceptions_frame, False, False, 0)
+            box.pack_start(domains_frame, True, True, 0)
+            box.pack_start(ips_frame, True, True, 0)
+            box.pack_start(info_label, False, False, 0)
+            
+            content_area.pack_start(box, True, True, 0)
+            content_area.show_all()
+            
+            response = dialog.run()
+            
+            if response == Gtk.ResponseType.OK:
+                # Сохраняем настройки
+                self.whitelist["enabled"] = enable_check.get_active()
+                self.whitelist["bypass_proxy"] = bypass_proxy_check.get_active()
+                self.whitelist["bypass_dpi"] = bypass_dpi_check.get_active()
                 
-                # Применяем настройки прокси если белый список включен
-                if self.whitelist["enabled"] and self.whitelist["bypass_proxy"]:
-                    self.apply_whitelist_proxy_settings()
-            else:
-                self.show_notification("Ошибка", "Не удалось сохранить белый список")
-        
+                # Сохраняем домены
+                domains_start, domains_end = domains_buffer.get_bounds()
+                domains_text = domains_buffer.get_text(domains_start, domains_end, True)
+                self.whitelist["domains"] = [
+                    domain.strip() for domain in domains_text.split('\n') 
+                    if domain.strip()
+                ]
+                
+                # Сохраняем IP
+                ips_start, ips_end = ips_buffer.get_bounds()
+                ips_text = ips_buffer.get_text(ips_start, ips_end, True)
+                self.whitelist["ips"] = [
+                    ip.strip() for ip in ips_text.split('\n') 
+                    if ip.strip()
+                ]
+                
+                if self.save_whitelist():
+                    self.show_notification("Белый список", "Настройки сохранены")
+                    
+                    # Применяем настройки прокси если белый список включен
+                    if self.whitelist["enabled"] and self.whitelist["bypass_proxy"]:
+                        self.apply_whitelist_proxy_settings()
+                else:
+                    self.show_notification("Ошибка", "Не удалось сохранить белый список")
+###
+        except Exception as e:
+            print(f"ERROR in show_whitelist_dialog: {e}")
+            import traceback
+            traceback.print_exc()
+###
         dialog.destroy()
 
     def apply_whitelist_proxy_settings(self):
@@ -1165,105 +1174,127 @@ class AdvancedTrayIndicator:
         return True, ""
 
     def show_settings(self, widget=None):
-        """Диалог настроек параметров"""
-        dialog = Gtk.Dialog(title="Настройки параметров CIADPI", flags=0)
-        dialog.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
-                        Gtk.STOCK_OK, Gtk.ResponseType.OK)
-        dialog.set_default_size(700, 400)
+        ###
+        print("DEBUG: show_settings called")
+        try:        
+###            
+            """Диалог настроек параметров"""
+            dialog = Gtk.Dialog(title="Настройки параметров CIADPI", flags=0)
+            dialog.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
+                            Gtk.STOCK_OK, Gtk.ResponseType.OK)
+            dialog.set_default_size(700, 400)
 
-        content_area = dialog.get_content_area()
-        
-        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        main_box.set_margin_top(10)
-        main_box.set_margin_bottom(10)
-        main_box.set_margin_start(10)
-        main_box.set_margin_end(10)
-        
-        # Основное поле ввода
-        label = Gtk.Label(label="Параметры запуска CIADPI:")
-        label.set_xalign(0)
-        entry = Gtk.Entry()
-        current_params = self.get_current_service_params()
-        entry.set_text(current_params)
-        entry.set_width_chars(70)
-        
-        # Фрейм с примерами
-        examples_frame = Gtk.Frame()
-        examples_frame.set_shadow_type(Gtk.ShadowType.IN)
-        
-        examples_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
-        examples_box.set_margin_top(10)
-        examples_box.set_margin_bottom(10)
-        examples_box.set_margin_start(10)
-        examples_box.set_margin_end(10)
-        
-        examples_title = Gtk.Label()
-        examples_title.set_markup("<b>Примеры параметров (кликните для копирования):</b>")
-        examples_title.set_xalign(0)
-        examples_box.pack_start(examples_title, False, False, 0)
-        
-        # Список примеров
-        examples = [
-            "-o1 -o25+s -T3 -At o--tlsrec 1+s",
-            "-o2 -o15+s -T2 -At o--tlsrec", 
-            "-o1 -o5+s -T1 -At",
-            "-o3 -o20+s -T3 -At o--tlsrec 2+s",
-            "-o4 -o10+m -T5 -A torst -L 1"
-        ]
-        
-        for example in examples:
-            example_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
+            content_area = dialog.get_content_area()
             
-            # Поле с примером (выделяемое и копируемое)
-            example_entry = Gtk.Entry()
-            example_entry.set_text(example)
-            example_entry.set_editable(False)
-            example_entry.set_can_focus(False)
-            example_entry.set_hexpand(True)
+            main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+            main_box.set_margin_top(10)
+            main_box.set_margin_bottom(10)
+            main_box.set_margin_start(10)
+            main_box.set_margin_end(10)
             
-            # Стиль для поля примера
-            example_entry.set_size_request(400, 30)
-            example_entry.override_background_color(Gtk.StateFlags.NORMAL, 
-                                                Gdk.RGBA(0.95, 0.95, 0.95, 1.0))
-            example_entry.override_color(Gtk.StateFlags.NORMAL, 
-                                    Gdk.RGBA(0.2, 0.2, 0.2, 1.0))
+            # Основное поле ввода
+            label = Gtk.Label(label="Параметры запуска CIADPI:")
+            label.set_xalign(0)
+            entry = Gtk.Entry()
+            current_params = self.get_current_service_params()
+            entry.set_text(current_params)
+            entry.set_width_chars(70)
             
-            # Кнопка копирования
-            copy_btn = Gtk.Button.new_from_icon_name("edit-copy-symbolic", Gtk.IconSize.BUTTON)
-            copy_btn.set_tooltip_text("Копировать в буфер обмена")
-            copy_btn.connect("clicked", self.on_copy_example, example)
+            # Фрейм с примерами
+            examples_frame = Gtk.Frame()
+            examples_frame.set_shadow_type(Gtk.ShadowType.IN)
             
-            # Клик по полю тоже копирует
-            example_entry.connect("button-press-event", self.on_example_clicked, example)
+            examples_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
+            examples_box.set_margin_top(10)
+            examples_box.set_margin_bottom(10)
+            examples_box.set_margin_start(10)
+            examples_box.set_margin_end(10)
             
-            example_box.pack_start(example_entry, True, True, 0)
-            example_box.pack_start(copy_btn, False, False, 0)
-            examples_box.pack_start(example_box, False, False, 0)
-        
-        examples_frame.add(examples_box)
-        
-        # Подсказка
-        hint_label = Gtk.Label()
-        hint_label.set_markup("<small>💡 Параметры проверяются автоматически при сохранении</small>")
-        hint_label.set_xalign(0)
-        hint_label.set_sensitive(False)
-        
-        main_box.pack_start(label, False, False, 0)
-        main_box.pack_start(entry, False, False, 0)
-        main_box.pack_start(examples_frame, True, True, 0)
-        main_box.pack_start(hint_label, False, False, 0)
-        
-        content_area.pack_start(main_box, True, True, 0)
-        content_area.show_all()
-        
-        response = dialog.run()
-        
-        if response == Gtk.ResponseType.OK:
-            new_params = entry.get_text().strip()
-            if new_params and new_params != current_params:
-                self.apply_params(new_params)
-        
-        dialog.destroy()
+            examples_title = Gtk.Label()
+            examples_title.set_markup("<b>Примеры параметров (кликните для копирования):</b>")
+            examples_title.set_xalign(0)
+            examples_box.pack_start(examples_title, False, False, 0)
+            
+            # Список примеров
+            examples = [
+                "-o1 -o25+s -T3 -At o--tlsrec 1+s",
+                "-o2 -o15+s -T2 -At o--tlsrec", 
+                "-o1 -o5+s -T1 -At",
+                "-o3 -o20+s -T3 -At o--tlsrec 2+s",
+                "-o4 -o10+m -T5 -A torst -L 1"
+            ]
+            
+            for example in examples:
+                example_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
+                
+                # Поле с примером (выделяемое и копируемое)
+                example_entry = Gtk.Entry()
+                example_entry.set_text(example)
+                example_entry.set_editable(False)
+                example_entry.set_can_focus(False)
+                example_entry.set_hexpand(True)
+                
+                # Стиль для поля примера
+                example_entry.set_size_request(400, 30)
+                example_entry.override_background_color(Gtk.StateFlags.NORMAL, 
+                                                    Gdk.RGBA(0.95, 0.95, 0.95, 1.0))
+                example_entry.override_color(Gtk.StateFlags.NORMAL, 
+                                        Gdk.RGBA(0.2, 0.2, 0.2, 1.0))
+                
+                # Кнопка копирования
+                copy_btn = Gtk.Button.new_from_icon_name("edit-copy-symbolic", Gtk.IconSize.BUTTON)
+                copy_btn.set_tooltip_text("Копировать в буфер обмена")
+                copy_btn.connect("clicked", self.on_copy_example, example)
+                
+                # Клик по полю тоже копирует
+                example_entry.connect("button-press-event", self.on_example_clicked, example)
+                
+                example_box.pack_start(example_entry, True, True, 0)
+                example_box.pack_start(copy_btn, False, False, 0)
+                examples_box.pack_start(example_box, False, False, 0)
+            
+            examples_frame.add(examples_box)
+            
+            # Подсказка
+            hint_label = Gtk.Label()
+            hint_label.set_markup("<small>💡 Параметры проверяются автоматически при сохранении</small>")
+            hint_label.set_xalign(0)
+            hint_label.set_sensitive(False)
+            
+            main_box.pack_start(label, False, False, 0)
+            main_box.pack_start(entry, False, False, 0)
+            main_box.pack_start(examples_frame, True, True, 0)
+            main_box.pack_start(hint_label, False, False, 0)
+            
+            content_area.pack_start(main_box, True, True, 0)
+            content_area.show_all()             
+###
+            response = dialog.run()
+            print(f"DEBUG: Dialog response: {response}")
+            
+            if response == Gtk.ResponseType.OK:
+                print("DEBUG: OK clicked")
+                new_params = entry.get_text().strip()
+                print(f"DEBUG: New params: {new_params}")
+                if new_params and new_params != current_params:
+                    print("DEBUG: Calling update_service_params")
+                    threading.Thread(
+                        self.show_notification("Перезапуск...", "Перезапуск сервиса, подождите"),
+                        target=self.update_service_params, 
+                        args=(new_params,),
+                        daemon=True
+                    ).start()    
+
+            else:
+                print("DEBUG: Cancel or close clicked")
+            dialog.destroy()                 
+              
+                
+        except Exception as e:
+            print(f"ERROR in show_settings: {e}")
+            import traceback
+            traceback.print_exc()                    
+###            
 
     def on_copy_example(self, button, example_text):
         """Копирование примера в буфер обмена"""
@@ -1271,7 +1302,7 @@ class AdvancedTrayIndicator:
         clipboard.set_text(example_text, -1)
         
         # Показываем уведомление
-        self.show_message(f"Скопировано: {example_text}")
+        self.show_notification("Скопировано:", f" {example_text}")
 
     def on_example_clicked(self, widget, event, example_text):
         """Обработка клика по полю с примером"""
@@ -1323,7 +1354,7 @@ class AdvancedTrayIndicator:
                 best_params, best_speed = self.autosearcher.find_optimal_params(max_tests, 15)
                 if best_params:
                     self.show_notification("Найдены параметры", f"Оптимальные параметры: {best_params}")
-                    self.apply_params(best_params)
+                    self.update_service_params(best_params)
                 else:
                     self.show_notification("Поиск", "Не найдено рабочих параметров")
             except Exception as e:
