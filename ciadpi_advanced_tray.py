@@ -15,6 +15,14 @@ gi.require_version('Gtk', '3.0')
 gi.require_version('AppIndicator3', '0.1')
 from gi.repository import Gtk, AppIndicator3, GLib
 
+try:
+    from ciadpi_whitelist import WhitelistManager
+    WHITELIST_AVAILABLE = True
+except ImportError as e:
+    print(f"Модуль белого списка не доступен: {e}")
+    WHITELIST_AVAILABLE = False
+    WhitelistManager = None
+
 # Отладочная информация
 DEBUG_LOG = Path.home() / '.config' / 'ciadpi' / 'indicator_debug.log'
 
@@ -66,6 +74,13 @@ class AdvancedTrayIndicator:
         self.service_file = Path('/etc/systemd/system/ciadpi.service')
         self.default_params = "-o1 -o25+s -T3 -At o--tlsrec 1+s"
         self.current_params = self.load_config()
+        self.whitelist_file = Path.home() / '.config' / 'ciadpi' / 'whitelist.json'
+        self.whitelist = self.load_whitelist()
+
+        if WHITELIST_AVAILABLE:
+            self.whitelist_manager = WhitelistManager()
+        else:
+            self.whitelist_manager = None        
 
         # Проверяем текущие настройки прокси
         GLib.timeout_add(5000, self.check_current_proxy)  # Через 3 секунды после запуска   
@@ -261,6 +276,249 @@ RestartSec=5
             except:
                 pass
             return False
+        
+    # Методы для работы с белым списком:
+    def load_whitelist(self):
+        """Загрузка белого списка"""
+        default_whitelist = {
+            "enabled": False,
+            "domains": [
+                "localhost",
+                "127.0.0.1",
+                "192.168.1.1",
+                "*.local"
+            ],
+            "ips": [
+                "192.168.1.0/24",
+                "10.0.0.0/8"
+            ],
+            "bypass_proxy": True,
+            "bypass_dpi": False
+        }
+        
+        try:
+            self.whitelist_file.parent.mkdir(exist_ok=True)
+            if self.whitelist_file.exists():
+                with open(self.whitelist_file, 'r', encoding='utf-8') as f:
+                    whitelist = json.load(f)
+                    # Проверяем что все необходимые поля есть
+                    for key in default_whitelist:
+                        if key not in whitelist:
+                            whitelist[key] = default_whitelist[key]
+                    return whitelist
+        except Exception as e:
+            print(f"Ошибка загрузки белого списка: {e}")
+            
+        return default_whitelist
+
+    def save_whitelist(self):
+        """Сохранение белого списка"""
+        try:
+            with open(self.whitelist_file, 'w', encoding='utf-8') as f:
+                json.dump(self.whitelist, f, indent=2, ensure_ascii=False)
+            return True
+        except Exception as e:
+            print(f"Ошибка сохранения белого списка: {e}")
+            return False
+
+    def is_whitelisted(self, host):
+        """Проверка находится ли хост в белом списке"""
+        if not self.whitelist.get("enabled", False):
+            return False
+        
+        # Проверка точного совпадения домена
+        if host in self.whitelist.get("domains", []):
+            return True
+        
+        # Проверка по маске домена
+        for domain_pattern in self.whitelist.get("domains", []):
+            if domain_pattern.startswith('*.'):
+                pattern = domain_pattern[2:]
+                if host.endswith(pattern) or host == pattern:
+                    return True
+        
+        # TODO: Добавить проверку IP и CIDR при необходимости
+        return False
+
+    def show_whitelist_dialog(self, widget):
+        """Диалог управления белым списком"""
+        dialog = Gtk.Dialog(title="Управление белым списком", flags=0)
+        dialog.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
+                        Gtk.STOCK_OK, Gtk.ResponseType.OK)
+        dialog.set_default_size(600, 500)
+
+        content_area = dialog.get_content_area()
+        
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        box.set_margin_top(10)
+        box.set_margin_bottom(10)
+        box.set_margin_start(10)
+        box.set_margin_end(10)
+        
+        # Включение белого списка
+        enable_check = Gtk.CheckButton(label="Включить белый список")
+        enable_check.set_active(self.whitelist.get("enabled", False))
+        
+        # Настройки исключений
+        exceptions_frame = Gtk.Frame(label="Исключения из проксирования")
+        exceptions_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
+        exceptions_box.set_margin_top(5)
+        exceptions_box.set_margin_bottom(5)
+        exceptions_box.set_margin_start(5)
+        exceptions_box.set_margin_end(5)
+        
+        bypass_proxy_check = Gtk.CheckButton(label="Исключить из проксирования")
+        bypass_proxy_check.set_active(self.whitelist.get("bypass_proxy", True))
+        
+        bypass_dpi_check = Gtk.CheckButton(label="Исключить из DPI обхода")
+        bypass_dpi_check.set_active(self.whitelist.get("bypass_dpi", False))
+        bypass_dpi_check.set_sensitive(False)  # Пока не реализовано
+        
+        exceptions_box.pack_start(bypass_proxy_check, False, False, 0)
+        exceptions_box.pack_start(bypass_dpi_check, False, False, 0)
+        exceptions_frame.add(exceptions_box)
+        
+        # Домены
+        domains_frame = Gtk.Frame(label="Домены и хосты (по одному на строку)")
+        domains_scroll = Gtk.ScrolledWindow()
+        domains_scroll.set_min_content_height(150)
+        
+        domains_text = Gtk.TextView()
+        domains_text.set_wrap_mode(Gtk.WrapMode.WORD)
+        domains_buffer = domains_text.get_buffer()
+        
+        # Загружаем текущие домены
+        domains_text = "\n".join(self.whitelist.get("domains", []))
+        domains_buffer.set_text(domains_text)
+        
+        domains_scroll.add(domains_text)
+        domains_frame.add(domains_scroll)
+        
+        # IP-адреса
+        ips_frame = Gtk.Frame(label="IP-адреса и сети CIDR (по одному на строку)")
+        ips_scroll = Gtk.ScrolledWindow()
+        ips_scroll.set_min_content_height(100)
+        
+        ips_text = Gtk.TextView()
+        ips_text.set_wrap_mode(Gtk.WrapMode.WORD)
+        ips_buffer = ips_text.get_buffer()
+        
+        # Загружаем текущие IP
+        ips_text = "\n".join(self.whitelist.get("ips", []))
+        ips_buffer.set_text(ips_text)
+        
+        ips_scroll.add(ips_text)
+        ips_frame.add(ips_scroll)
+        
+        # Информация
+        info_label = Gtk.Label()
+        info_label.set_markup(
+            "<small>Подсказки:\n"
+            "• <tt>example.com</tt> - точное совпадение\n"
+            "• <tt>*.example.com</tt> - все поддомены\n" 
+            "• <tt>192.168.1.0/24</tt> - подсеть CIDR\n"
+            "• <tt>localhost</tt>, <tt>127.0.0.1</tt> - локальные адреса</small>"
+        )
+        info_label.set_sensitive(False)
+        
+        box.pack_start(enable_check, False, False, 0)
+        box.pack_start(exceptions_frame, False, False, 0)
+        box.pack_start(domains_frame, True, True, 0)
+        box.pack_start(ips_frame, True, True, 0)
+        box.pack_start(info_label, False, False, 0)
+        
+        content_area.pack_start(box, True, True, 0)
+        content_area.show_all()
+        
+        response = dialog.run()
+        
+        if response == Gtk.ResponseType.OK:
+            # Сохраняем настройки
+            self.whitelist["enabled"] = enable_check.get_active()
+            self.whitelist["bypass_proxy"] = bypass_proxy_check.get_active()
+            self.whitelist["bypass_dpi"] = bypass_dpi_check.get_active()
+            
+            # Сохраняем домены
+            domains_start, domains_end = domains_buffer.get_bounds()
+            domains_text = domains_buffer.get_text(domains_start, domains_end, True)
+            self.whitelist["domains"] = [
+                domain.strip() for domain in domains_text.split('\n') 
+                if domain.strip()
+            ]
+            
+            # Сохраняем IP
+            ips_start, ips_end = ips_buffer.get_bounds()
+            ips_text = ips_buffer.get_text(ips_start, ips_end, True)
+            self.whitelist["ips"] = [
+                ip.strip() for ip in ips_text.split('\n') 
+                if ip.strip()
+            ]
+            
+            if self.save_whitelist():
+                self.show_notification("Белый список", "Настройки сохранены")
+                
+                # Применяем настройки прокси если белый список включен
+                if self.whitelist["enabled"] and self.whitelist["bypass_proxy"]:
+                    self.apply_whitelist_proxy_settings()
+            else:
+                self.show_notification("Ошибка", "Не удалось сохранить белый список")
+        
+        dialog.destroy()
+
+    def apply_whitelist_proxy_settings(self):
+        """Применение настроек прокси с учетом белого списка"""
+        if not self.whitelist.get("enabled", False) or not self.whitelist.get("bypass_proxy", True):
+            return
+        
+        try:
+            # Получаем текущие настройки прокси
+            current_settings = self.get_system_proxy_settings()
+            
+            if current_settings.get('mode') == 'manual':
+                # Формируем строку исключений для прокси
+                ignore_hosts = self.whitelist.get("domains", []) + self.whitelist.get("ips", [])
+                
+                if ignore_hosts:
+                    # Устанавливаем игнорируемые хосты
+                    ignore_string = ",".join(ignore_hosts)
+                    subprocess.run([
+                        'gsettings', 'set', 'org.gnome.system.proxy', 'ignore-hosts', 
+                        f"['{ignore_string}']"
+                    ], check=False)
+                    
+                    log_debug(f"Применен белый список прокси: {ignore_string}")
+                    
+        except Exception as e:
+            print(f"Ошибка применения белого списка прокси: {e}")
+
+    def get_proxy_env_with_whitelist(self):
+        """Получение переменных окружения для прокси с учетом белого списка"""
+        env_vars = {}
+        
+        if (self.current_params.get("proxy_enabled", False) and 
+            self.current_params.get("proxy_mode") == 'manual' and
+            not self.whitelist.get("enabled", False)):
+            
+            host = self.current_params.get("proxy_host", "127.0.0.1")
+            port = self.current_params.get("proxy_port", "1080")
+            
+            if host:  # Если хост не пустой
+                proxy_url = f"http://{host}:{port}"
+            else:
+                proxy_url = f"http://:{port}"  # Формат с пустым хостом
+                
+            env_vars = {
+                'http_proxy': proxy_url,
+                'https_proxy': proxy_url,
+                'ftp_proxy': proxy_url,
+                'HTTP_PROXY': proxy_url,
+                'HTTPS_PROXY': proxy_url,
+                'FTP_PROXY': proxy_url,
+                'no_proxy': ','.join(self.whitelist.get("domains", []) + self.whitelist.get("ips", [])),
+                'NO_PROXY': ','.join(self.whitelist.get("domains", []) + self.whitelist.get("ips", []))
+            }
+        
+        return env_vars        
 
     def create_menu(self):
         menu = Gtk.Menu()
@@ -294,6 +552,11 @@ RestartSec=5
         proxy_item = Gtk.MenuItem(label="🔌 Настройки прокси")
         proxy_item.connect("activate", self.show_proxy_settings)
         menu.append(proxy_item)
+
+        # БЕЛЫЙ СПИСОК
+        whitelist_item = Gtk.MenuItem(label="📝 Белый список")
+        whitelist_item.connect("activate", self.show_whitelist_dialog)
+        menu.append(whitelist_item)        
         
         menu.append(Gtk.SeparatorMenuItem())
         
@@ -603,6 +866,22 @@ RestartSec=5
                 # Для автоматического режима обычно нужен PAC URL
                 # Пока оставим пустым
                 pass
+
+            # ПРИМЕНЯЕМ БЕЛЫЙ СПИСОК ДЛЯ ИГНОРИРУЕМЫХ ХОСТОВ
+            if self.whitelist.get("enabled", False) and self.whitelist.get("bypass_proxy", True):
+                ignore_hosts = self.whitelist.get("domains", []) + self.whitelist.get("ips", [])
+                if ignore_hosts:
+                    ignore_string = "[" + ",".join([f"'{host}'" for host in ignore_hosts]) + "]"
+                    subprocess.run([
+                        'gsettings', 'set', 'org.gnome.system.proxy', 'ignore-hosts', 
+                        ignore_string
+                    ], check=False)
+                    print(f"✅ Белый список применен: {len(ignore_hosts)} записей")
+            else:
+                # Очищаем игнорируемые хосты если белый список выключен
+                subprocess.run([
+                    'gsettings', 'reset', 'org.gnome.system.proxy', 'ignore-hosts'
+                ], check=False)            
                 
             host_display = "ПУСТОЙ" if not host else host
             print(f"✅ Системный прокси установлен: {mode} Хост: {host_display} Порт: {port}")

@@ -21,6 +21,7 @@ class CIAutoSearch:
         self.current_test_url = 0
         self.is_searching = False
         self.current_process = None
+        self.whitelist_manager = WhitelistManager()
         
         # Настройка логирования
         logging.basicConfig(
@@ -82,6 +83,10 @@ class CIAutoSearch:
         try:
             test_url = self.test_urls[self.current_test_url]
             self.current_test_url = (self.current_test_url + 1) % len(self.test_urls)
+
+            # Пропускаем тестирование если URL в белом списке
+            if self.whitelist_manager.is_whitelisted(test_url):
+                return True, 0.1, test_url  # Быстрый успех для белого списка            
 
             start_time = time.time()
             result = subprocess.run([

@@ -301,6 +301,29 @@ EOF
     
     # Create logs directory
     mkdir -p "$config_dir/logs"
+
+    # Create whitelist if not exists
+    if [ ! -f "$config_dir/whitelist.json" ]; then
+        cat << EOF > "$config_dir/whitelist.json"
+{
+    "enabled": false,
+    "domains": [
+        "localhost",
+        "127.0.0.1", 
+        "*.local",
+        "192.168.1.1"
+    ],
+    "ips": [
+        "192.168.1.0/24",
+        "10.0.0.0/8"
+    ],
+    "bypass_proxy": true,
+    "bypass_dpi": false,
+    "description": "Белый список для исключения ресурсов из проксирования"
+}
+EOF
+        log "Default whitelist created"
+    fi    
 }
 
 # Setup permissions
