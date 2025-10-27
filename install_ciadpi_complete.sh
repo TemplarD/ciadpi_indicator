@@ -1,6 +1,7 @@
 #!/bin/bash
 
-# Complete CIADPI Installer - Installs both byedpi and indicator
+# Complete CIADPI Installer v1.2.5
+# Installs both byedpi and indicator with smart local/remote detection
 
 set -e
 
@@ -60,11 +61,11 @@ install_byedpi() {
         cd "$byedpi_dir"
     fi
     
-    # Check if main.c exists (new structure)
+    # Check if main.c exists
     if [ ! -f "main.c" ]; then
         error "main.c not found in byedpi repository"
     fi
-
+    
     log "Building ciadpi binary..."
     # Используем Makefile если есть
     if [ -f "Makefile" ]; then
@@ -116,81 +117,24 @@ install_dependencies() {
     sudo apt install -y "$@" || error "Failed to install dependencies: $*"
 }
 
-# Install systemd service
-install_service() {
-    log "Installing systemd service..."
+# Функция для получения текущих параметров
+get_current_params() {
+    local config_file="$HOME/.config/ciadpi/config.json"
+    local default_params="-o1 -o25+s -T3 -At o--tlsrec 1+s"
     
-    local byedpi_dir="$HOME/byedpi"
-    local service_file="ciadpi.service"
-    local temp_service="/tmp/ciadpi_service_temp"
-    
-    if [ -f "$service_file" ]; then
-        # Локальная установка
-        cp "$service_file" "$temp_service"
+    if [ -f "$config_file" ]; then
+        local params_from_config=$(python3 -c "
+import json
+try:
+    with open('$config_file', 'r') as f:
+        config = json.load(f)
+    print(config.get('current_params', '$default_params'))
+except:
+    print('$default_params')
+")
+        echo "$params_from_config"
     else
-        # Удаленная установка
-        log "Downloading service file from GitHub..."
-        wget -q -O "$temp_service" "https://raw.githubusercontent.com/templard/ciadpi_indicator/master/ciadpi.service"
-    fi
-    
-    # Вставляем User, WorkingDirectory, ExecStart в секцию [Service]
-    sed -i '/\[Service\]/a User='"$USER"'\nWorkingDirectory='"$byedpi_dir"'\nExecStart='"$byedpi_dir"'/ciadpi -o1 -o25+s -T3 -At o--tlsrec 1+s' "$temp_service"
-    
-    # Копируем исправленный файл
-    sudo cp "$temp_service" /etc/systemd/system/ciadpi.service
-    rm -f "$temp_service"
-    
-    sudo systemctl daemon-reload || error "Failed to reload systemd"
-    log "Systemd service installed"
-}
-
-# Install systemd service
-install_service() {
-    log "Installing systemd service..."
-    
-    local byedpi_dir="$HOME/byedpi"
-    
-    # Умная логика: локальная vs удаленная установка
-    local service_file="ciadpi.service"
-    
-    if [ -f "$service_file" ]; then
-        # ЛОКАЛЬНАЯ установка - используем локальный файл
-        log "Local installation detected, using local service file"
-        sudo cp "$service_file" /etc/systemd/system/ciadpi.service
-        
-        # Динамически добавляем ExecStart с правильными параметрами
-        add_dynamic_execstart
-        
-    else
-        # УДАЛЕННАЯ установка - создаем файл с нуля
-        log "Remote installation detected, creating service file from scratch"
-        create_service_file_from_scratch
-    fi
-    
-    sudo systemctl daemon-reload || error "Failed to reload systemd"
-    log "Systemd service installed"
-}
-
-# Функция для добавления ExecStart в существующий файл
-add_dynamic_execstart() {
-    local byedpi_dir="$HOME/byedpi"
-    local current_params=$(get_current_params)
-    
-    # Добавляем/обновляем ExecStart в секции [Service]
-    if grep -q "ExecStart=" /etc/systemd/system/ciadpi.service; then
-        # Обновляем существующий ExecStart
-        sudo sed -i "s|ExecStart=.*|ExecStart=$byedpi_dir/ciadpi $current_params|" /etc/systemd/system/ciadpi.service
-    else
-        # Добавляем ExecStart после [Service]
-        sudo sed -i "/\[Service\]/a ExecStart=$byedpi_dir/ciadpi $current_params" /etc/systemd/system/ciadpi.service
-    fi
-    
-    # Добавляем/обновляем User и WorkingDirectory
-    if ! grep -q "User=" /etc/systemd/system/ciadpi.service; then
-        sudo sed -i "/\[Service\]/a User=$USER" /etc/systemd/system/ciadpi.service
-    fi
-    if ! grep -q "WorkingDirectory=" /etc/systemd/system/ciadpi.service; then
-        sudo sed -i "/\[Service\]/a WorkingDirectory=$byedpi_dir" /etc/systemd/system/ciadpi.service
+        echo "$default_params"
     fi
 }
 
@@ -219,25 +163,90 @@ WantedBy=multi-user.target
 EOF
 }
 
-# Функция для получения текущих параметров
-get_current_params() {
-    local config_file="$HOME/.config/ciadpi/config.json"
-    local default_params="-o1 -o25+s -T3 -At o--tlsrec 1+s"
+# Функция для добавления ExecStart в существующий файл
+add_dynamic_execstart() {
+    local byedpi_dir="$HOME/byedpi"
+    local current_params=$(get_current_params)
     
-    if [ -f "$config_file" ]; then
-        local params_from_config=$(python3 -c "
-import json
-try:
-    with open('$config_file', 'r') as f:
-        config = json.load(f)
-    print(config.get('current_params', '$default_params'))
-except:
-    print('$default_params')
-")
-        echo "$params_from_config"
+    # Добавляем/обновляем ExecStart в секции [Service]
+    if grep -q "ExecStart=" /etc/systemd/system/ciadpi.service; then
+        # Обновляем существующий ExecStart
+        sudo sed -i "s|ExecStart=.*|ExecStart=$byedpi_dir/ciadpi $current_params|" /etc/systemd/system/ciadpi.service
     else
-        echo "$default_params"
+        # Добавляем ExecStart после [Service]
+        sudo sed -i "/\[Service\]/a ExecStart=$byedpi_dir/ciadpi $current_params" /etc/systemd/system/ciadpi.service
     fi
+    
+    # Добавляем/обновляем User и WorkingDirectory
+    if ! grep -q "User=" /etc/systemd/system/ciadpi.service; then
+        sudo sed -i "/\[Service\]/a User=$USER" /etc/systemd/system/ciadpi.service
+    fi
+    if ! grep -q "WorkingDirectory=" /etc/systemd/system/ciadpi.service; then
+        sudo sed -i "/\[Service\]/a WorkingDirectory=$byedpi_dir" /etc/systemd/system/ciadpi.service
+    fi
+}
+
+# Install systemd service
+install_service() {
+    log "Installing systemd service..."
+    
+    local byedpi_dir="$HOME/byedpi"
+    local service_file="ciadpi.service"
+    
+    # Умная логика: локальная vs удаленная установка
+    if [ -f "$service_file" ]; then
+        # ЛОКАЛЬНАЯ установка - используем локальный файл
+        log "Local installation detected, using local service file"
+        sudo cp "$service_file" /etc/systemd/system/ciadpi.service
+        
+        # Динамически добавляем ExecStart с правильными параметрами
+        add_dynamic_execstart
+        
+    else
+        # УДАЛЕННАЯ установка - создаем файл с нуля
+        log "Remote installation detected, creating service file from scratch"
+        create_service_file_from_scratch
+    fi
+    
+    sudo systemctl daemon-reload || error "Failed to reload systemd"
+    log "Systemd service installed"
+}
+
+# Install Python scripts
+install_python_scripts() {
+    log "Installing Python scripts..."
+    
+    mkdir -p "$HOME/.local/bin"
+    
+    # Умная логика: локальная vs удаленная установка
+    if [ -f "ciadpi_advanced_tray.py" ]; then
+        # ЛОКАЛЬНАЯ установка - файлы есть в текущей директории
+        log "Local installation detected, copying local files..."
+        
+        cp "ciadpi_advanced_tray.py" "$HOME/.local/bin/"
+        chmod +x "$HOME/.local/bin/ciadpi_advanced_tray.py"
+        
+        [ -f "ciadpi_launcher.sh" ] && cp "ciadpi_launcher.sh" "$HOME/.local/bin/" && chmod +x "$HOME/.local/bin/ciadpi_launcher.sh"
+        [ -f "ciadpi_autosearch.py" ] && cp "ciadpi_autosearch.py" "$HOME/.local/bin/"
+        [ -f "ciadpi_param_generator.py" ] && cp "ciadpi_param_generator.py" "$HOME/.local/bin/"
+        
+    else
+        # УДАЛЕННАЯ установка - скачиваем с GitHub
+        log "Remote installation detected, downloading from GitHub..."
+        
+        BASE_URL="https://raw.githubusercontent.com/templard/ciadpi_indicator/master"
+        
+        wget -q -O "$HOME/.local/bin/ciadpi_advanced_tray.py" "$BASE_URL/ciadpi_advanced_tray.py"
+        chmod +x "$HOME/.local/bin/ciadpi_advanced_tray.py"
+        
+        wget -q -O "$HOME/.local/bin/ciadpi_launcher.sh" "$BASE_URL/ciadpi_launcher.sh"
+        chmod +x "$HOME/.local/bin/ciadpi_launcher.sh"
+        
+        wget -q -O "$HOME/.local/bin/ciadpi_autosearch.py" "$BASE_URL/ciadpi_autosearch.py" 2>/dev/null || warn "Autosearch script not available"
+        wget -q -O "$HOME/.local/bin/ciadpi_param_generator.py" "$BASE_URL/ciadpi_param_generator.py" 2>/dev/null || warn "Param generator script not available"
+    fi
+    
+    log "Python scripts installed to ~/.local/bin/"
 }
 
 # Install desktop files
@@ -246,7 +255,7 @@ install_desktop_files() {
     
     # Create application directory
     mkdir -p "$HOME/.local/share/applications"
-      
+    
     # Desktop file for indicator
     cat << EOF > "$HOME/.local/share/applications/ciadpi-indicator.desktop"
 [Desktop Entry]
@@ -261,7 +270,7 @@ StartupNotify=false
 Terminal=false
 X-GNOME-Autostart-enabled=true
 EOF
-
+    
     # Autostart file
     mkdir -p "$HOME/.config/autostart"
     cp "$HOME/.local/share/applications/ciadpi-indicator.desktop" "$HOME/.config/autostart/"
@@ -346,9 +355,14 @@ test_installation() {
 
 # Post-installation info
 post_install_info() {
+    local context="remote"
+    if [ -f "install_ciadpi_complete.sh" ]; then
+        context="local"
+    fi
+    
     echo
     echo -e "${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${GREEN}║               Complete CIADPI Installation Done!            ║${NC}"
+    echo -e "${GREEN}║                Complete CIADPI Installation Done!            ║${NC}"
     echo -e "${GREEN}╚══════════════════════════════════════════════════════════════╝${NC}"
     echo
     echo -e "${BLUE}What was installed:${NC}"
@@ -358,21 +372,25 @@ post_install_info() {
     echo -e "  • ${GREEN}✓${NC} Systemd service"
     echo -e "  • ${GREEN}✓${NC} Autostart configuration"
     echo
-    echo -e "${BLUE}Installation locations:${NC}"
-    echo -e "  ${YELLOW}byedpi:${NC} ~/byedpi/"
-    echo -e "  ${YELLOW}Indicator:${NC} ~/.local/bin/ciadpi_advanced_tray.py"
-    echo -e "  ${YELLOW}Service:${NC} /etc/systemd/system/ciadpi.service"
-    echo -e "  ${YELLOW}Config:${NC} ~/.config/ciadpi/"
+    
+    if [ "$context" = "local" ]; then
+        echo -e "${BLUE}Исходные файлы остались в:${NC}"
+        echo -e "  $(pwd)"
+        echo
+        echo -e "${YELLOW}Для удаления запустите:${NC}"
+        echo -e "  ./uninstall_ciadpi_complete.sh"
+    else
+        echo -e "${YELLOW}Для удаления:${NC}"
+        echo -e "  wget -O uninstall_ciadpi.sh https://raw.githubusercontent.com/templard/ciadpi_indicator/master/uninstall_ciadpi_complete.sh"
+        echo -e "  chmod +x uninstall_ciadpi.sh"
+        echo -e "  ./uninstall_ciadpi.sh"
+    fi
+    
     echo
     echo -e "${BLUE}How to use:${NC}"
     echo -e "  ${YELLOW}System Tray:${NC} Look for network icon in system tray"
     echo -e "  ${YELLOW}Manual Start:${NC} ~/.local/bin/ciadpi_advanced_tray.py"
     echo -e "  ${YELLOW}Service Control:${NC} systemctl {start|stop|restart} ciadpi"
-    echo
-    echo -e "${BLUE}Useful commands:${NC}"
-    echo -e "  ${YELLOW}Check service:${NC} systemctl status ciadpi.service"
-    echo -e "  ${YELLOW}View logs:${NC} journalctl -u ciadpi.service -f"
-    echo -e "  ${YELLOW}Uninstall:${NC} Run uninstall_ciadpi_complete.sh"
     echo
     echo -e "${GREEN}The indicator should appear in your system tray!${NC}"
     echo -e "${YELLOW}If it doesn't appear, log out and log back in or restart.${NC}"
@@ -382,7 +400,7 @@ post_install_info() {
 # Main installation function
 main() {
     echo -e "${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${GREEN}║               Complete CIADPI Installer                     ║${NC}"
+    echo -e "${GREEN}║                Complete CIADPI Installer                     ║${NC}"
     echo -e "${GREEN}╚══════════════════════════════════════════════════════════════╝${NC}"
     echo
     echo -e "${BLUE}This will install:${NC}"
