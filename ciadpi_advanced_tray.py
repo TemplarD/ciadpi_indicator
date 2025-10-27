@@ -14,7 +14,7 @@ from typing import Tuple, List, Dict
 
 gi.require_version('Gtk', '3.0')
 gi.require_version('AppIndicator3', '0.1')
-from gi.repository import Gtk, AppIndicator3, GLib
+from gi.repository import Gtk, Gdk, AppIndicator3, GLib
 
 try:
     import sys
@@ -1097,31 +1097,6 @@ class AdvancedTrayIndicator:
 
     def restart_service(self, widget):
         self.run_command("systemctl restart ciadpi.service")
-
-    def validate_params(self, params):
-        """Валидация параметров ciadpi"""
-        if not params or not params.strip():
-            return False, "Параметры не могут быть пустыми"
-        
-        # Проверяем наличие обязательных параметров
-        params_list = params.split()
-        
-        # Проверяем конфликтующие параметры
-        if '-A' in params_list and '-o' not in params_list:
-            return False, "Автоматический режим (-A) требует указания методов обхода (-o)"
-        
-        # Проверяем порт (если указан)
-        if '-p' in params_list:
-            port_index = params_list.index('-p') + 1
-            if port_index < len(params_list):
-                try:
-                    port = int(params_list[port_index])
-                    if port < 1 or port > 65535:
-                        return False, f"Некорректный порт: {port}"
-                except ValueError:
-                    return False, "Порт должен быть числом"
-        
-        return True, "OK"        
 
     def validate_params(self, params: str) -> Tuple[bool, str]:
         """Проверка параметров ciadpi с детальными сообщениями об ошибках"""
