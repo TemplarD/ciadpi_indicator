@@ -144,41 +144,100 @@ install_service() {
     log "Systemd service installed"
 }
 
-# Install Python scripts
-install_python_scripts() {
-    log "Installing Python scripts..."
+# Install systemd service
+install_service() {
+    log "Installing systemd service..."
     
-    mkdir -p "$HOME/.local/bin"
+    local byedpi_dir="$HOME/byedpi"
     
-    # Определяем контекст - локальная установка или удаленная
-    if [ -f "ciadpi_advanced_tray.py" ]; then
-        # Локальная установка - файлы есть в текущей директории
-        log "Local installation detected, copying local files..."
+    # Умная логика: локальная vs удаленная установка
+    local service_file="ciadpi.service"
+    
+    if [ -f "$service_file" ]; then
+        # ЛОКАЛЬНАЯ установка - используем локальный файл
+        log "Local installation detected, using local service file"
+        sudo cp "$service_file" /etc/systemd/system/ciadpi.service
         
-        cp "ciadpi_advanced_tray.py" "$HOME/.local/bin/"
-        chmod +x "$HOME/.local/bin/ciadpi_advanced_tray.py"
-        
-        [ -f "ciadpi_launcher.sh" ] && cp "ciadpi_launcher.sh" "$HOME/.local/bin/" && chmod +x "$HOME/.local/bin/ciadpi_launcher.sh"
-        [ -f "ciadpi_autosearch.py" ] && cp "ciadpi_autosearch.py" "$HOME/.local/bin/"
-        [ -f "ciadpi_param_generator.py" ] && cp "ciadpi_param_generator.py" "$HOME/.local/bin/"
+        # Динамически добавляем ExecStart с правильными параметрами
+        add_dynamic_execstart
         
     else
-        # Удаленная установка - скачиваем с GitHub
-        log "Remote installation detected, downloading from GitHub..."
-        
-        BASE_URL="https://raw.githubusercontent.com/templard/ciadpi_indicator/master"
-        
-        wget -q -O "$HOME/.local/bin/ciadpi_advanced_tray.py" "$BASE_URL/ciadpi_advanced_tray.py"
-        chmod +x "$HOME/.local/bin/ciadpi_advanced_tray.py"
-        
-        wget -q -O "$HOME/.local/bin/ciadpi_launcher.sh" "$BASE_URL/ciadpi_launcher.sh"
-        chmod +x "$HOME/.local/bin/ciadpi_launcher.sh"
-        
-        wget -q -O "$HOME/.local/bin/ciadpi_autosearch.py" "$BASE_URL/ciadpi_autosearch.py" 2>/dev/null || warn "Autosearch script not available"
-        wget -q -O "$HOME/.local/bin/ciadpi_param_generator.py" "$BASE_URL/ciadpi_param_generator.py" 2>/dev/null || warn "Param generator script not available"
+        # УДАЛЕННАЯ установка - создаем файл с нуля
+        log "Remote installation detected, creating service file from scratch"
+        create_service_file_from_scratch
     fi
     
-    log "Python scripts installed to ~/.local/bin/"
+    sudo systemctl daemon-reload || error "Failed to reload systemd"
+    log "Systemd service installed"
+}
+
+# Функция для добавления ExecStart в существующий файл
+add_dynamic_execstart() {
+    local byedpi_dir="$HOME/byedpi"
+    local current_params=$(get_current_params)
+    
+    # Добавляем/обновляем ExecStart в секции [Service]
+    if grep -q "ExecStart=" /etc/systemd/system/ciadpi.service; then
+        # Обновляем существующий ExecStart
+        sudo sed -i "s|ExecStart=.*|ExecStart=$byedpi_dir/ciadpi $current_params|" /etc/systemd/system/ciadpi.service
+    else
+        # Добавляем ExecStart после [Service]
+        sudo sed -i "/\[Service\]/a ExecStart=$byedpi_dir/ciadpi $current_params" /etc/systemd/system/ciadpi.service
+    fi
+    
+    # Добавляем/обновляем User и WorkingDirectory
+    if ! grep -q "User=" /etc/systemd/system/ciadpi.service; then
+        sudo sed -i "/\[Service\]/a User=$USER" /etc/systemd/system/ciadpi.service
+    fi
+    if ! grep -q "WorkingDirectory=" /etc/systemd/system/ciadpi.service; then
+        sudo sed -i "/\[Service\]/a WorkingDirectory=$byedpi_dir" /etc/systemd/system/ciadpi.service
+    fi
+}
+
+# Функция для создания service файла с нуля
+create_service_file_from_scratch() {
+    local byedpi_dir="$HOME/byedpi"
+    local current_params=$(get_current_params)
+    
+    cat << EOF | sudo tee /etc/systemd/system/ciadpi.service > /dev/null
+[Unit]
+Description=CIADPI DPI Bypass Service
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=$USER
+WorkingDirectory=$byedpi_dir
+ExecStart=$byedpi_dir/ciadpi $current_params
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=30
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+# Функция для получения текущих параметров
+get_current_params() {
+    local config_file="$HOME/.config/ciadpi/config.json"
+    local default_params="-o1 -o25+s -T3 -At o--tlsrec 1+s"
+    
+    if [ -f "$config_file" ]; then
+        local params_from_config=$(python3 -c "
+import json
+try:
+    with open('$config_file', 'r') as f:
+        config = json.load(f)
+    print(config.get('current_params', '$default_params'))
+except:
+    print('$default_params')
+")
+        echo "$params_from_config"
+    else
+        echo "$default_params"
+    fi
 }
 
 # Install desktop files
