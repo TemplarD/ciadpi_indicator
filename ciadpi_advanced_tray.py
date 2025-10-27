@@ -109,6 +109,9 @@ class AdvancedTrayIndicator:
         GLib.timeout_add_seconds(3, self.update_status)
         log_debug("AdvancedTrayIndicator initialization completed")
 
+        # Восстанавливаем наши настройки прокси при запуске
+        GLib.timeout_add(3000, self.restore_our_proxy_settings)  # Через 3 сек после запуска        
+
     def initialize_indicator(self):
         """Отложенная инициализация индикатора"""
         try:
@@ -871,17 +874,10 @@ class AdvancedTrayIndicator:
             mode_index = mode_combo.get_active()
             modes = ['auto', 'manual', 'none']
             selected_mode = modes[mode_index] if mode_index >= 0 else 'none'
-
-            # Сохраняем настройку автоматического отключения
-            self.current_params["auto_disable_proxy"] = auto_disable_check.get_active()
-            self.save_config()            
             
             # Получаем хост и порт
             proxy_host = host_entry.get_text().strip()
             proxy_port = port_entry.get_text().strip()
-            
-            # Сохраняем ПУСТОЕ значение если поле пустое
-            # Не подставляем никаких значений по умолчанию!
             
             # Валидация порта
             if not proxy_port.isdigit():
@@ -889,18 +885,21 @@ class AdvancedTrayIndicator:
                 dialog.destroy()
                 return
             
-            # Сохраняем в конфиг (сохраняем ПУСТУЮ строку если поле пустое)
+            # Сохраняем в конфиг
             self.current_params["proxy_enabled"] = selected_mode != 'none'
-            self.current_params["proxy_host"] = proxy_host  # Может быть пустой строкой
+            self.current_params["proxy_host"] = proxy_host
             self.current_params["proxy_port"] = proxy_port
             self.current_params["proxy_mode"] = selected_mode
             self.save_config()
+            
+            # Сохраняем оригинальные настройки если мы впервые включаем прокси
+            if selected_mode == 'manual' and not self.proxy_was_enabled_by_us:
+                self.save_original_settings_if_needed()
             
             # Применяем системные настройки
             success = self.apply_system_proxy(selected_mode, proxy_host, proxy_port)
             
             if success:
-                # Показываем в уведомлении реальные значения
                 display_host = "ПУСТОЙ" if not proxy_host else proxy_host
                 self.show_notification("Прокси", f"Прокси {selected_mode} применен\nХост: {display_host}\nПорт: {proxy_port}")
             else:
@@ -966,18 +965,15 @@ class AdvancedTrayIndicator:
     def apply_system_proxy(self, mode, host, port):
         """Применение системных настроек прокси через NetworkManager"""
         try:
-            # Сохраняем оригинальные настройки ПЕРЕД первым применением нашего прокси
-            if mode == 'manual' and not self.proxy_was_enabled_by_us:
-                self.save_original_proxy_settings()
-                self.proxy_was_enabled_by_us = True              
-            # Метод 1: Через gsettings (для GNOME приложений)
+            # Только применяем настройки, не сохраняем оригинальные здесь
+            # Оригинальные сохраняются только при первом включении нашего прокси
+            
             subprocess.run([
                 'gsettings', 'set', 'org.gnome.system.proxy', 'mode', mode
             ], check=False)
             
             if mode == 'manual':
                 # Используем ПУСТОЕ значение если host пустой
-                # Некоторые системы могут работать с пустым хостом
                 effective_host = host  # Может быть пустой строкой!
                 
                 # Настраиваем HTTP
@@ -1011,7 +1007,6 @@ class AdvancedTrayIndicator:
                 
             elif mode == 'auto':
                 # Для автоматического режима обычно нужен PAC URL
-                # Пока оставим пустым
                 pass
 
             # ПРИМЕНЯЕМ БЕЛЫЙ СПИСОК ДЛЯ ИГНОРИРУЕМЫХ ХОСТОВ
@@ -1033,10 +1028,10 @@ class AdvancedTrayIndicator:
             host_display = "ПУСТОЙ" if not host else host
             print(f"✅ Системный прокси установлен: {mode} Хост: {host_display} Порт: {port}")
             
-            # Метод 2: Через Environment (для терминальных приложений)
+            # Применяем переменные окружения
             self.apply_environment_proxy(mode, host, port)
             
-            # Метод 3: Перезапускаем NetworkManager для применения настроек
+            # Перезапускаем NetworkManager для применения настроек
             self.restart_network_services()
             
             return True
@@ -1227,7 +1222,53 @@ class AdvancedTrayIndicator:
             # если они были сохранены
             
         except Exception as e:
-            print(f"⚠️ Ошибка восстановления переменных окружения: {e}")            
+            print(f"⚠️ Ошибка восстановления переменных окружения: {e}")      
+
+    # Восстановление наших настроек прокси
+    def restore_our_proxy_settings(self):
+        """Восстановление наших настроек прокси при запуске приложения"""
+        try:
+            # Проверяем, были ли у нас включены настройки прокси
+            if (self.current_params.get("proxy_enabled", False) and 
+                self.current_params.get("proxy_mode") == 'manual'):
+                
+                # Проверяем статус сервиса
+                result = subprocess.run(
+                    ['systemctl', 'is-active', 'ciadpi.service'],
+                    capture_output=True, text=True, timeout=2
+                )
+                service_running = result.stdout.strip() == 'active'
+                
+                if service_running:
+                    print("🔄 Восстанавливаем наши настройки прокси...")
+                    
+                    host = self.current_params.get("proxy_host", "")
+                    port = self.current_params.get("proxy_port", "1080")
+                    
+                    # Применяем наши настройки
+                    success = self.apply_system_proxy('manual', host, port)
+                    
+                    if success:
+                        print("✅ Наши настройки прокси восстановлены")
+                        self.show_notification("Прокси", "Настройки прокси восстановлены")
+                    else:
+                        print("❌ Не удалось восстановить настройки прокси")
+                        
+            else:
+                print("ℹ️ Наши настройки прокси не требуют восстановления")
+                
+        except Exception as e:
+            print(f"⚠️ Ошибка восстановления наших настроек прокси: {e}")
+        
+        return False  # Останавливаем таймер     
+
+    # Для первоначального сохранения оригинальных настроек
+    def save_original_settings_if_needed(self):
+        """Сохраняет оригинальные настройки при первом включении нашего прокси"""
+        if not self.proxy_was_enabled_by_us:
+            self.original_proxy_settings = self.get_system_proxy_settings()
+            self.proxy_was_enabled_by_us = True
+            print("💾 Сохранены оригинальные настройки прокси при первом включении")                 
 
     def run_command(self, command):
         def run_in_thread():
@@ -1253,7 +1294,39 @@ class AdvancedTrayIndicator:
         threading.Thread(target=run_in_thread, daemon=True).start()
 
     def start_service(self, widget):
-        self.run_command("systemctl start ciadpi.service")
+        """Запуск сервиса с восстановлением наших настроек прокси"""
+        def start_with_proxy():
+            try:
+                # Сначала запускаем сервис
+                result = subprocess.run(
+                    ['sudo', 'systemctl', 'start', 'ciadpi.service'],
+                    capture_output=True, text=True, timeout=10
+                )
+                
+                if result.returncode == 0:
+                    # После успешного запуска сервиса восстанавливаем наши настройки прокси
+                    time.sleep(2)  # Даем сервису время на запуск
+                    
+                    if (self.current_params.get("proxy_enabled", False) and 
+                        self.current_params.get("proxy_mode") == 'manual'):
+                        
+                        host = self.current_params.get("proxy_host", "")
+                        port = self.current_params.get("proxy_port", "1080")
+                        self.apply_system_proxy('manual', host, port)
+                        self.show_notification("Сервис запущен", "Прокси настройки восстановлены")
+                    else:
+                        self.show_notification("Сервис запущен", "Сервис запущен успешно")
+                        
+                else:
+                    self.show_notification("Ошибка", result.stderr)
+                    
+                time.sleep(1)
+                self.update_status()
+                
+            except Exception as e:
+                self.show_notification("Ошибка", str(e))
+        
+        threading.Thread(target=start_with_proxy, daemon=True).start()
 
     def stop_service(self, widget):
         """Остановка сервиса с опциональным отключением прокси"""
