@@ -124,32 +124,12 @@ install_service() {
     local service_file="ciadpi.service"
     
     if [ -f "$service_file" ]; then
-        # Use the service file from repository
-        sudo cp "$service_file" /etc/systemd/system/ciadpi.service || error "Failed to copy service file"
+        # Локальный файл
+        sudo cp "$service_file" /etc/systemd/system/ciadpi.service
     else
-        # Create service file dynamically
-        warn "Service file not found in repository, creating default..."
-        
-        cat << EOF | sudo tee /etc/systemd/system/ciadpi.service > /dev/null
-[Unit]
-Description=CIADPI DPI Bypass Service
-After=network.target
-Wants=network.target
-
-[Service]
-Type=simple
-User=$USER
-WorkingDirectory=$byedpi_dir
-ExecStart=$byedpi_dir/ciadpi -o1 -o25+s -T3 -At o--tlsrec 1+s
-Restart=on-failure
-RestartSec=5
-TimeoutStartSec=30
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-EOF
+        # Скачать с GitHub
+        log "Downloading service file from GitHub..."
+        sudo wget -q -O /etc/systemd/system/ciadpi.service "https://raw.githubusercontent.com/templard/ciadpi_indicator/master/ciadpi.service"
     fi
     
     sudo systemctl daemon-reload || error "Failed to reload systemd"
@@ -162,34 +142,32 @@ install_python_scripts() {
     
     mkdir -p "$HOME/.local/bin"
     
-    # Copy main indicator script
+    # Определяем контекст - локальная установка или удаленная
     if [ -f "ciadpi_advanced_tray.py" ]; then
+        # Локальная установка - файлы есть в текущей директории
+        log "Local installation detected, copying local files..."
+        
         cp "ciadpi_advanced_tray.py" "$HOME/.local/bin/"
         chmod +x "$HOME/.local/bin/ciadpi_advanced_tray.py"
-        log "Indicator script installed"
+        
+        [ -f "ciadpi_launcher.sh" ] && cp "ciadpi_launcher.sh" "$HOME/.local/bin/" && chmod +x "$HOME/.local/bin/ciadpi_launcher.sh"
+        [ -f "ciadpi_autosearch.py" ] && cp "ciadpi_autosearch.py" "$HOME/.local/bin/"
+        [ -f "ciadpi_param_generator.py" ] && cp "ciadpi_param_generator.py" "$HOME/.local/bin/"
+        
     else
-        error "ciadpi_advanced_tray.py not found in repository"
-    fi
-    
-    # Лаунчер
-    if [ -f "ciadpi_launcher.sh" ]; then
-        cp "ciadpi_launcher.sh" "$HOME/.local/bin/"
+        # Удаленная установка - скачиваем с GitHub
+        log "Remote installation detected, downloading from GitHub..."
+        
+        BASE_URL="https://raw.githubusercontent.com/templard/ciadpi_indicator/master"
+        
+        wget -q -O "$HOME/.local/bin/ciadpi_advanced_tray.py" "$BASE_URL/ciadpi_advanced_tray.py"
+        chmod +x "$HOME/.local/bin/ciadpi_advanced_tray.py"
+        
+        wget -q -O "$HOME/.local/bin/ciadpi_launcher.sh" "$BASE_URL/ciadpi_launcher.sh"
         chmod +x "$HOME/.local/bin/ciadpi_launcher.sh"
-        log "Launcher script installed"        
-    fi
-
-    # Copy autosearch if available
-    if [ -f "ciadpi_autosearch.py" ]; then
-        cp "ciadpi_autosearch.py" "$HOME/.local/bin/"
-        chmod +x "$HOME/.local/bin/ciadpi_autosearch.py"
-        log "Autosearch script installed"
-    fi
-
-    # Генератор параметров
-    if [ -f "ciadpi_param_generator.py" ]; then
-        cp "ciadpi_param_generator.py" "$HOME/.local/bin/"
-        chmod +x "$HOME/.local/bin/ciadpi_param_generator.py"
-        log "Generator param script installed"        
+        
+        wget -q -O "$HOME/.local/bin/ciadpi_autosearch.py" "$BASE_URL/ciadpi_autosearch.py" 2>/dev/null || warn "Autosearch script not available"
+        wget -q -O "$HOME/.local/bin/ciadpi_param_generator.py" "$BASE_URL/ciadpi_param_generator.py" 2>/dev/null || warn "Param generator script not available"
     fi
     
     log "Python scripts installed to ~/.local/bin/"
