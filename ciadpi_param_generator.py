@@ -180,6 +180,77 @@ class AdvancedParamGenerator:
         unique_combinations = list(set(combinations))
         return unique_combinations[:count]
 
+    def validate_params(self, params: str) -> Tuple[bool, str]:
+        """Валидация параметров с детальным выводом ошибок"""
+        if not params.strip():
+            return True, ""
+            
+        parts = params.split()
+        unknown_params = []
+        invalid_values = []
+        
+        # Все допустимые параметры
+        valid_params = set()
+        for param_list in self.all_params.values():
+            for param in param_list:
+                if param:  # Игнорируем пустые строки
+                    # Извлекаем имя параметра (первое слово)
+                    param_name = param.split()[0] if ' ' in param else param
+                    valid_params.add(param_name)
+        
+        # Добавляем методы обхода
+        for method in self.obfuscation_methods:
+            valid_params.add(method)
+            for suffix in self.method_suffixes:
+                if suffix:  # Игнорируем пустой суффикс
+                    valid_params.add(method + suffix)
+        
+        # Добавляем специальные параметры
+        valid_params.update(['-At', '1+s', '2+s', '3+s', 'o--tlsrec'])
+        
+        i = 0
+        while i < len(parts):
+            part = parts[i]
+            
+            # Проверяем, является ли часть допустимым параметром
+            if part not in valid_params:
+                # Проверяем, не является ли это значением предыдущего параметра
+                if i > 0 and parts[i-1] in ['-H', '-j', '-l', '-n']:
+                    # Эти параметры принимают произвольные значения
+                    i += 1
+                    continue
+                
+                # Проверяем специальные форматы
+                if (part.startswith('o--tlsrec') or 
+                    part in ['1+s', '2+s', '3+s'] or
+                    re.match(r'^-o\d+[\+sme]*$', part) or
+                    re.match(r'^-\w+ \S+', ' '.join(parts[max(0,i-1):i+1]))):
+                    i += 1
+                    continue
+                
+                unknown_params.append(part)
+            
+            i += 1
+        
+        if unknown_params:
+            error_msg = f"Неизвестные параметры: {', '.join(unknown_params)}\n"
+            error_msg += f"Допустимые параметры: {', '.join(sorted(valid_params))}"
+            return False, error_msg
+        
+        return True, ""
+
+    def get_usage_examples(self) -> List[str]:
+        """Получить примеры использования для UI"""
+        return [
+            "-o1 -o25+s -T3 -At o--tlsrec 1+s",
+            "-o2 -o15+s -T2 -At o--tlsrec", 
+            "-o1 -o5+s -T1 -At",
+            "-o3 -o20+s -T3 -At o--tlsrec 2+s",
+            "-o4 -o10+m -T5 -A torst -L 1",
+            "-o7 -o18+e -T2 -s 5+sm -d 2+h",
+            "-o1 -o12+s -T3 -f 3+m -r 5"
+        ]
+
     def mutate_params(self, base_params: str, intensity: float = 0.3) -> str:
         """Мутация существующих параметров"""
         parts = base_params.split()
@@ -284,3 +355,18 @@ if __name__ == "__main__":
         print(f"{i+1}. {mutated}")
     
     print(f"\n📋 Всего доступно параметров: {sum(len(v) for v in generator.all_params.values())}")
+    
+    print("\n✅ Примеры использования (для UI):")
+    examples = generator.get_usage_examples()
+    for i, example in enumerate(examples, 1):
+        print(f"{i}. {example}")
+    
+    print("\n🔍 Тест валидации:")
+    test_params = ["-o1 -o25+s -T3", "-invalid -o1", "-o1 -unknown_param"]
+    for params in test_params:
+        is_valid, message = generator.validate_params(params)
+        print(f"Параметры: {params}")
+        print(f"Результат: {'✅ Valid' if is_valid else '❌ Invalid'}")
+        if not is_valid:
+            print(f"Ошибка: {message}")
+        print()

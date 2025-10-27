@@ -1122,59 +1122,162 @@ class AdvancedTrayIndicator:
         
         return True, "OK"        
 
-    def apply_params(self, params):
-        """Применение новых параметров с валидацией"""
-        # Валидируем параметры
-        is_valid, message = self.validate_params(params)
-        if not is_valid:
-            self.show_notification("Ошибка параметров", message)
-            return False
+    def validate_params(self, params: str) -> Tuple[bool, str]:
+        """Проверка параметров ciadpi с детальными сообщениями об ошибках"""
+        if not params.strip():
+            return True, ""
         
-        if self.update_service_params(params):
-            self.show_notification("Параметры", "Параметры обновлены. Перезапустите сервис.")
-            self.restart_service(None)
-            self.update_status()
-            return True
-        else:
-            self.show_notification("Ошибка", "Не удалось обновить параметры")
-            return False
+        # Все допустимые параметры из документации
+        valid_params = {
+            # Основные
+            '-i', '-p', '-D', '-w', '-E', '-c', '-I', '-b', '-g', '-N', '-U', '-F',
+            # Автоматический режим  
+            '-A', '-L', '-u', '-y', '-T',
+            # Протоколы
+            '-K',
+            # Ограничители
+            '-H', '-j', '-V', '-R',
+            # Методы обхода
+            '-s', '-d', '-o', '-q', '-f', '-r',
+            # Модификации
+            '-t', '-S', '-O', '-l', '-e', '-n', '-Q', '-M', '-a', '-Y'
+        }
+        
+        # Методы обхода (-o1 до -o25)
+        obfuscation_methods = {f'-o{i}' for i in range(1, 26)}
+        valid_params.update(obfuscation_methods)
+        
+        parts = params.split()
+        unknown_params = []
+        
+        i = 0
+        while i < len(parts):
+            part = parts[i]
+            
+            # Проверяем основные параметры
+            if part in valid_params:
+                i += 1
+                continue
+                
+            # Проверяем методы обхода с суффиксами (-o1+s, -o25+m и т.д.)
+            if re.match(r'^-o\d+[\+sme]*$', part):
+                i += 1
+                continue
+                
+            # Проверяем специальные форматы (1+s, 2+s, o--tlsrec)
+            if part in ['1+s', '2+s', '3+s', '-At', 'o--tlsrec']:
+                i += 1
+                continue
+                
+            # Параметры со значениями (пропускаем следующую часть)
+            if part in ['-i', '-p', '-w', '-c', '-I', '-b', '-g', '-u', '-T', 
+                    '-A', '-L', '-K', '-H', '-j', '-V', '-R', '-s', '-d', 
+                    '-o', '-q', '-f', '-r', '-t', '-O', '-l', '-e', '-n', '-a']:
+                if i + 1 < len(parts):
+                    i += 2  # Пропускаем параметр и его значение
+                    continue
+            
+            # Если дошли сюда - параметр неизвестен
+            unknown_params.append(part)
+            i += 1
+        
+        if unknown_params:
+            error_msg = f"Неизвестные параметры: {', '.join(unknown_params)}\n"
+            error_msg += "Используйте только параметры из документации ciadpi"
+            return False, error_msg
+        
+        return True, ""
 
     def show_settings(self, widget):
         """Диалог настроек параметров"""
         dialog = Gtk.Dialog(title="Настройки параметров CIADPI", flags=0)
         dialog.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
                         Gtk.STOCK_OK, Gtk.ResponseType.OK)
-        dialog.set_default_size(600, 200)
+        dialog.set_default_size(700, 400)
 
         content_area = dialog.get_content_area()
         
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        box.set_margin_top(10)
-        box.set_margin_bottom(10)
-        box.set_margin_start(10)
-        box.set_margin_end(10)
+        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        main_box.set_margin_top(10)
+        main_box.set_margin_bottom(10)
+        main_box.set_margin_start(10)
+        main_box.set_margin_end(10)
         
+        # Основное поле ввода
         label = Gtk.Label(label="Параметры запуска CIADPI:")
+        label.set_xalign(0)
         entry = Gtk.Entry()
         current_params = self.get_current_service_params()
         entry.set_text(current_params)
-        entry.set_width_chars(60)
+        entry.set_width_chars(70)
         
-        # Добавляем подсказку с примерами
-        examples_label = Gtk.Label()
-        examples_label.set_markup(
-            "<small>Примеры:\n"
-            "• <tt>-o1 -o25+s -T3 -At o--tlsrec 1+s</tt>\n"
-            "• <tt>-o2 -o15+s -T2 -At o--tlsrec</tt>\n"
-            "• <tt>-o1 -o5+s -T1 -At</tt></small>"
-        )
-        examples_label.set_sensitive(False)
+        # Фрейм с примерами
+        examples_frame = Gtk.Frame()
+        examples_frame.set_shadow_type(Gtk.ShadowType.IN)
         
-        box.pack_start(label, False, False, 0)
-        box.pack_start(entry, False, False, 0)
-        box.pack_start(examples_label, False, False, 0)
+        examples_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
+        examples_box.set_margin_top(10)
+        examples_box.set_margin_bottom(10)
+        examples_box.set_margin_start(10)
+        examples_box.set_margin_end(10)
         
-        content_area.pack_start(box, True, True, 0)
+        examples_title = Gtk.Label()
+        examples_title.set_markup("<b>Примеры параметров (кликните для копирования):</b>")
+        examples_title.set_xalign(0)
+        examples_box.pack_start(examples_title, False, False, 0)
+        
+        # Список примеров
+        examples = [
+            "-o1 -o25+s -T3 -At o--tlsrec 1+s",
+            "-o2 -o15+s -T2 -At o--tlsrec", 
+            "-o1 -o5+s -T1 -At",
+            "-o3 -o20+s -T3 -At o--tlsrec 2+s",
+            "-o4 -o10+m -T5 -A torst -L 1"
+        ]
+        
+        for example in examples:
+            example_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
+            
+            # Поле с примером (выделяемое и копируемое)
+            example_entry = Gtk.Entry()
+            example_entry.set_text(example)
+            example_entry.set_editable(False)
+            example_entry.set_can_focus(False)
+            example_entry.set_hexpand(True)
+            
+            # Стиль для поля примера
+            example_entry.set_size_request(400, 30)
+            example_entry.override_background_color(Gtk.StateFlags.NORMAL, 
+                                                Gdk.RGBA(0.95, 0.95, 0.95, 1.0))
+            example_entry.override_color(Gtk.StateFlags.NORMAL, 
+                                    Gdk.RGBA(0.2, 0.2, 0.2, 1.0))
+            
+            # Кнопка копирования
+            copy_btn = Gtk.Button.new_from_icon_name("edit-copy-symbolic", Gtk.IconSize.BUTTON)
+            copy_btn.set_tooltip_text("Копировать в буфер обмена")
+            copy_btn.connect("clicked", self.on_copy_example, example)
+            
+            # Клик по полю тоже копирует
+            example_entry.connect("button-press-event", self.on_example_clicked, example)
+            
+            example_box.pack_start(example_entry, True, True, 0)
+            example_box.pack_start(copy_btn, False, False, 0)
+            examples_box.pack_start(example_box, False, False, 0)
+        
+        examples_frame.add(examples_box)
+        
+        # Подсказка
+        hint_label = Gtk.Label()
+        hint_label.set_markup("<small>💡 Параметры проверяются автоматически при сохранении</small>")
+        hint_label.set_xalign(0)
+        hint_label.set_sensitive(False)
+        
+        main_box.pack_start(label, False, False, 0)
+        main_box.pack_start(entry, False, False, 0)
+        main_box.pack_start(examples_frame, True, True, 0)
+        main_box.pack_start(hint_label, False, False, 0)
+        
+        content_area.pack_start(main_box, True, True, 0)
         content_area.show_all()
         
         response = dialog.run()
@@ -1182,9 +1285,24 @@ class AdvancedTrayIndicator:
         if response == Gtk.ResponseType.OK:
             new_params = entry.get_text().strip()
             if new_params and new_params != current_params:
-                self.apply_params(new_params)  # Используем новый метод с валидацией
+                self.apply_params(new_params)
         
         dialog.destroy()
+
+    def on_copy_example(self, button, example_text):
+        """Копирование примера в буфер обмена"""
+        clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+        clipboard.set_text(example_text, -1)
+        
+        # Показываем уведомление
+        self.show_message(f"Скопировано: {example_text}")
+
+    def on_example_clicked(self, widget, event, example_text):
+        """Обработка клика по полю с примером"""
+        if event.type == Gdk.EventType.BUTTON_PRESS:
+            self.on_copy_example(None, example_text)
+            return True
+        return False
 
     def show_autosearch_dialog(self, widget):
         """Упрощенный диалог автопоиска"""
