@@ -886,44 +886,40 @@ class AdvancedTrayIndicator:
             if not proxy_port.isdigit():
                 self.show_notification("Ошибка", "Порт должен быть числом")
                 dialog.destroy()
-                return
+                return          
             
-            self.current_params["auto_disable_proxy"] = auto_disable_check.get_active()
-            print(f"💾 Сохраняем auto_disable_proxy = {self.current_params['auto_disable_proxy']}")            
+            # ⭐ ЛОГИКА УПРАВЛЕНИЯ ПРОКСИ (ВСЕ В ОДНОМ МЕСТЕ)
+            if selected_mode == 'manual' and not self.we_changed_proxy:
+                # ВКЛЮЧАЕМ ПРОКСИ ВПЕРВЫЕ
+                self.save_system_proxy_backup()
+                self.we_changed_proxy = True
+                print("💾 Включен наш прокси, сохранены системные настройки")
+                
+            elif selected_mode == 'none' and self.we_changed_proxy:
+                # ОТКЛЮЧАЕМ ПРОКСИ
+                self.restore_system_proxy_backup()
+                self.we_changed_proxy = False
+                print("💾 Прокси отключен, восстановлены системные настройки")
             
-            # СОХРАНЯЕМ НАШИ НАСТРОЙКИ В КОНФИГ
+            # ⭐ СОХРАНЕНИЕ В КОНФИГ (ВСЕГО ОДИН РАЗ)
             self.current_params["proxy_enabled"] = selected_mode != 'none'
             self.current_params["proxy_host"] = proxy_host
             self.current_params["proxy_port"] = proxy_port
             self.current_params["proxy_mode"] = selected_mode
-            
-            # ⭐ ОБНОВЛЯЕМ И СОХРАНЯЕМ ФЛАГ
-            if selected_mode == 'manual' and not self.we_changed_proxy:
-                self.we_changed_proxy = True
-            elif selected_mode == 'none' and self.we_changed_proxy:
-                self.we_changed_proxy = False
-                
+            self.current_params["auto_disable_proxy"] = auto_disable_check.get_active()
             self.current_params["we_changed_proxy"] = self.we_changed_proxy
+            
+            print(f"💾 Сохраняем конфиг: auto_disable_proxy={self.current_params['auto_disable_proxy']}, we_changed_proxy={self.we_changed_proxy}")
             self.save_config()
             
-            # ЕСЛИ МЫ ВКЛЮЧАЕМ ПРОКСИ - СОХРАНЯЕМ СИСТЕМНЫЕ НАСТРОЙКИ
-            if selected_mode == 'manual' and not self.we_changed_proxy:
-                self.save_system_proxy_backup()
-                self.we_changed_proxy = True
-                self.save_config()  # ⭐ СОХРАНЯЕМ КОНФИГ С ФЛАГОМ
-            
-            # ЕСЛИ МЫ ВЫКЛЮЧАЕМ ПРОКСИ - ВОССТАНАВЛИВАЕМ СИСТЕМНЫЕ НАСТРОЙКИ
-            elif selected_mode == 'none' and self.we_changed_proxy:
-                self.restore_system_proxy_backup()
-                self.we_changed_proxy = False
-                self.save_config()  # ⭐ СОХРАНЯЕМ КОНФИГ С ФЛАГОМ
-            else:
-                # Просто применяем настройки
+            # ⭐ ПРИМЕНЕНИЕ НАСТРОЕК (ЕСЛИ НЕ БЫЛО ВОССТАНОВЛЕНИЯ)
+            if not (selected_mode == 'none' and self.we_changed_proxy):
+                # Просто применяем настройки (если не восстанавливали системные)
                 success = self.apply_system_proxy(selected_mode, proxy_host, proxy_port)
             
             display_host = "ПУСТОЙ" if not proxy_host else proxy_host
             self.show_notification("Прокси", f"Прокси {selected_mode} применен")
-        
+
         dialog.destroy()
 
     def get_system_proxy_settings(self):
@@ -1332,7 +1328,14 @@ class AdvancedTrayIndicator:
             def stop_with_proxy_restore():
                 try:
                     # Восстанавливаем системные настройки
-                    self.restore_system_proxy_backup()
+                    success = self.restore_system_proxy_backup()
+                    
+                    if success:
+                        # ⭐ СБРАСЫВАЕМ ФЛАГ ТОЛЬКО ЕСЛИ УСПЕШНО ВОССТАНОВИЛИ
+                        self.we_changed_proxy = False
+                        self.current_params["we_changed_proxy"] = False
+                        self.save_config()
+                        print("💾 Флаг we_changed_proxy сброшен после восстановления системных настроек")
                     
                     # Останавливаем сервис
                     result = subprocess.run(
