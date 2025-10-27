@@ -186,7 +186,8 @@ class AdvancedTrayIndicator:
             "proxy_host": "127.0.0.1",
             "proxy_port": "1080",
             "current_params": self.default_params,
-            "auto_disable_proxy": False 
+            "auto_disable_proxy": False,
+            "we_changed_proxy": False
         }
         
         try:
@@ -194,10 +195,13 @@ class AdvancedTrayIndicator:
             if self.config_file.exists():
                 with open(self.config_file, 'r', encoding='utf-8') as f:
                     config = json.load(f)
-                    # Проверяем, что все необходимые поля есть
                     for key in default_config:
                         if key not in config:
                             config[key] = default_config[key]
+                    
+                    # ВОССТАНАВЛИВАЕМ ФЛАГ ИЗ КОНФИГА
+                    self.we_changed_proxy = config.get("we_changed_proxy", False)
+                    print(f"🔍 ЗАГРУЖЕН КОНФИГ: we_changed_proxy = {self.we_changed_proxy}")
                     return config
         except Exception as e:
             print(f"Ошибка загрузки конфига: {e}")
@@ -207,8 +211,13 @@ class AdvancedTrayIndicator:
     def save_config(self):
         """Сохранение конфигурации в файл"""
         try:
+            # СОХРАНЯЕМ ФЛАГ В КОНФИГ
+            self.current_params["we_changed_proxy"] = self.we_changed_proxy
+            
             with open(self.config_file, 'w', encoding='utf-8') as f:
                 json.dump(self.current_params, f, indent=2, ensure_ascii=False)
+            
+            print(f"💾 КОНФИГ СОХРАНЕН: we_changed_proxy = {self.we_changed_proxy}")
         except Exception as e:
             print(f"Ошибка сохранения конфига: {e}")
 
@@ -884,23 +893,30 @@ class AdvancedTrayIndicator:
             self.current_params["proxy_host"] = proxy_host
             self.current_params["proxy_port"] = proxy_port
             self.current_params["proxy_mode"] = selected_mode
+            
+            # ⭐ ОБНОВЛЯЕМ И СОХРАНЯЕМ ФЛАГ
+            if selected_mode == 'manual' and not self.we_changed_proxy:
+                self.we_changed_proxy = True
+            elif selected_mode == 'none' and self.we_changed_proxy:
+                self.we_changed_proxy = False
+                
+            self.current_params["we_changed_proxy"] = self.we_changed_proxy
             self.save_config()
             
             # ЕСЛИ МЫ ВКЛЮЧАЕМ ПРОКСИ - СОХРАНЯЕМ СИСТЕМНЫЕ НАСТРОЙКИ
             if selected_mode == 'manual' and not self.we_changed_proxy:
                 self.save_system_proxy_backup()
                 self.we_changed_proxy = True
+                self.save_config()  # ⭐ СОХРАНЯЕМ КОНФИГ С ФЛАГОМ
             
             # ЕСЛИ МЫ ВЫКЛЮЧАЕМ ПРОКСИ - ВОССТАНАВЛИВАЕМ СИСТЕМНЫЕ НАСТРОЙКИ
             elif selected_mode == 'none' and self.we_changed_proxy:
                 self.restore_system_proxy_backup()
                 self.we_changed_proxy = False
+                self.save_config()  # ⭐ СОХРАНЯЕМ КОНФИГ С ФЛАГОМ
             else:
                 # Просто применяем настройки
                 success = self.apply_system_proxy(selected_mode, proxy_host, proxy_port)
-            
-            # Сохраняем наши настройки для восстановления
-            self.save_our_proxy_settings()
             
             display_host = "ПУСТОЙ" if not proxy_host else proxy_host
             self.show_notification("Прокси", f"Прокси {selected_mode} применен")
@@ -1191,6 +1207,14 @@ class AdvancedTrayIndicator:
                 self.current_params.get("proxy_mode") == 'manual'):
                 
                 print("🔄 Восстанавливаем наши настройки прокси при запуске...")
+                print(f"🔍 Флаг we_changed_proxy: {self.we_changed_proxy}")
+                
+                # ⭐ ВОССТАНАВЛИВАЕМ ФЛАГ ЕСЛИ ОН БЫЛ УСТАНОВЛЕН
+                if not self.we_changed_proxy:
+                    self.we_changed_proxy = True
+                    self.save_config()
+                    print("💾 Флаг we_changed_proxy восстановлен и сохранен")
+                
                 host = self.current_params.get("proxy_host", "")
                 port = self.current_params.get("proxy_port", "1080")
                 
@@ -1198,14 +1222,13 @@ class AdvancedTrayIndicator:
                 
                 if success:
                     print("✅ Наши настройки прокси восстановлены при запуске")
-                    self.we_changed_proxy = True
                 else:
                     print("❌ Не удалось восстановить настройки при запуске")
                     
         except Exception as e:
             print(f"⚠️ Ошибка восстановления настроек при запуске: {e}")
         
-        return False  # Останавливаем таймер    
+        return False  
 
     # Восстановление системных настроек
     def restore_system_proxy_backup(self):
@@ -1277,7 +1300,9 @@ class AdvancedTrayIndicator:
                         # ВОССТАНАВЛИВАЕМ ФЛАГ если у нас есть настройки прокси
                         if not self.we_changed_proxy:
                             self.save_system_proxy_backup()
-                            self.we_changed_proxy = True  # ⚠️ ВОССТАНАВЛИВАЕМ ФЛАГ
+                            self.we_changed_proxy = True
+                            self.save_config()  # ⭐ СОХРАНЯЕМ КОНФИГ С ФЛАГОМ
+                            print("💾 Флаг we_changed_proxy сохранен в конфиг")
                         
                         host = self.current_params.get("proxy_host", "")
                         port = self.current_params.get("proxy_port", "1080")
