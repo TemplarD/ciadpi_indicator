@@ -124,12 +124,20 @@ install_service() {
     local service_file="ciadpi.service"
     
     if [ -f "$service_file" ]; then
-        # Локальный файл
+        # Локальная установка - копируем и добавляем ExecStart
         sudo cp "$service_file" /etc/systemd/system/ciadpi.service
+        # Добавляем ExecStart в существующий файл
+        echo "User=$USER" | sudo tee -a /etc/systemd/system/ciadpi.service > /dev/null
+        echo "WorkingDirectory=$byedpi_dir" | sudo tee -a /etc/systemd/system/ciadpi.service > /dev/null
+        echo "ExecStart=$byedpi_dir/ciadpi -o1 -o25+s -T3 -At o--tlsrec 1+s" | sudo tee -a /etc/systemd/system/ciadpi.service > /dev/null
     else
-        # Скачать с GitHub
+        # Удаленная установка - скачиваем и добавляем ExecStart
         log "Downloading service file from GitHub..."
         sudo wget -q -O /etc/systemd/system/ciadpi.service "https://raw.githubusercontent.com/templard/ciadpi_indicator/master/ciadpi.service"
+        # Добавляем ExecStart в скачанный файл
+        echo "User=$USER" | sudo tee -a /etc/systemd/system/ciadpi.service > /dev/null
+        echo "WorkingDirectory=$byedpi_dir" | sudo tee -a /etc/systemd/system/ciadpi.service > /dev/null
+        echo "ExecStart=$byedpi_dir/ciadpi -o1 -o25+s -T3 -At o--tlsrec 1+s" | sudo tee -a /etc/systemd/system/ciadpi.service > /dev/null
     fi
     
     sudo systemctl daemon-reload || error "Failed to reload systemd"
