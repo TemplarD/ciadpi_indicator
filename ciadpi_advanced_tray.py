@@ -81,6 +81,8 @@ class AdvancedTrayIndicator:
         self.whitelist_file = Path.home() / '.config' / 'ciadpi' / 'whitelist.json'
         self.whitelist = self.load_whitelist()
         self.auto_disable_proxy = False
+        self.original_proxy_settings = self.get_system_proxy_settings()
+        self.proxy_was_enabled_by_us = False        
 
         if WHITELIST_AVAILABLE:
             self.whitelist_manager = WhitelistManager()
@@ -603,31 +605,36 @@ class AdvancedTrayIndicator:
 
     # МЕТОД для отключения прокси
     def disable_system_proxy(self):
-        """Полное отключение системного прокси"""
+        """Полное отключение системного прокси с восстановлением оригинальных настроек"""
         try:
             print("🔌 Отключаем системный прокси...")
             
-            # Отключаем через gsettings
-            subprocess.run([
-                'gsettings', 'set', 'org.gnome.system.proxy', 'mode', 'none'
-            ], check=False)
+            # Восстанавливаем оригинальные настройки вместо простого отключения
+            success = self.restore_original_proxy_settings()
             
-            # Очищаем переменные окружения
-            env_file = Path.home() / '.proxy_env'
-            if env_file.exists():
-                env_file.unlink()
+            if success:
+                self.show_notification("Прокси", "Настройки прокси восстановлены")
+            else:
+                # Fallback: просто отключаем если восстановление не удалось
+                subprocess.run([
+                    'gsettings', 'set', 'org.gnome.system.proxy', 'mode', 'none'
+                ], check=False)
+                self.show_notification("Прокси", "Прокси отключен")
                 
-            # Очищаем игнорируемые хосты
-            subprocess.run([
-                'gsettings', 'reset', 'org.gnome.system.proxy', 'ignore-hosts'
-            ], check=False)
-            
-            print("✅ Системный прокси отключен")
-            return True
+            return success
             
         except Exception as e:
             print(f"❌ Ошибка отключения прокси: {e}")
-            return False      
+            return False
+
+    # Сохранение текущих настроек перед изменением
+    def save_original_proxy_settings(self):
+        """Сохраняет текущие настройки прокси как оригинальные"""
+        self.original_proxy_settings = self.get_system_proxy_settings()
+        print("💾 Сохранены оригинальные настройки прокси:")
+        print(f"   Режим: {self.original_proxy_settings.get('mode')}")
+        print(f"   Хост: {self.original_proxy_settings.get('http_host')}")
+        print(f"   Порт: {self.original_proxy_settings.get('http_port')}")          
 
     def create_menu(self):
         menu = Gtk.Menu()
@@ -903,12 +910,11 @@ class AdvancedTrayIndicator:
 
     def get_system_proxy_settings(self):
         """Получение текущих системных настроек прокси"""
-        log_debug("show_proxy_settings called")  # Добавьте эту строку
-
         settings = {
             'mode': 'none',
-            'http_host': '127.0.0.1',
-            'http_port': '1080'
+            'http_host': '',
+            'http_port': '8080',  # дефолтный порт
+            'ignore_hosts': '[]'
         }
         
         try:
@@ -934,15 +940,36 @@ class AdvancedTrayIndicator:
                         settings['http_host'] = host_result.stdout.strip().strip("'")
                     if port_result.returncode == 0:
                         settings['http_port'] = port_result.stdout.strip()
+                    
+                    # Получаем игнорируемые хосты
+                    ignore_result = subprocess.run([
+                        'gsettings', 'get', 'org.gnome.system.proxy', 'ignore-hosts'
+                    ], capture_output=True, text=True, check=False)
+                    
+                    if ignore_result.returncode == 0:
+                        settings['ignore_hosts'] = ignore_result.stdout.strip()
                         
+            elif mode == 'auto':
+                # Для автоматического режима можно сохранить PAC URL
+                pac_result = subprocess.run([
+                    'gsettings', 'get', 'org.gnome.system.proxy', 'autoconfig-url'
+                ], capture_output=True, text=True, check=False)
+                
+                if pac_result.returncode == 0:
+                    settings['pac_url'] = pac_result.stdout.strip().strip("'")
+                            
         except Exception as e:
             print(f"❌ Ошибка получения настроек прокси: {e}")
         
-        return settings    
+        return settings
 
     def apply_system_proxy(self, mode, host, port):
         """Применение системных настроек прокси через NetworkManager"""
         try:
+            # Сохраняем оригинальные настройки ПЕРЕД первым применением нашего прокси
+            if mode == 'manual' and not self.proxy_was_enabled_by_us:
+                self.save_original_proxy_settings()
+                self.proxy_was_enabled_by_us = True              
             # Метод 1: Через gsettings (для GNOME приложений)
             subprocess.run([
                 'gsettings', 'set', 'org.gnome.system.proxy', 'mode', mode
@@ -1115,6 +1142,92 @@ class AdvancedTrayIndicator:
                     
         except Exception as e:
             print(f"❌ Ошибка проверки настроек прокси: {e}")
+
+    # Восстановление оригинальных настроек
+    def restore_original_proxy_settings(self):
+        """Восстановление оригинальных настроек прокси"""
+        try:
+            if not self.original_proxy_settings:
+                print("ℹ️ Нет сохраненных настроек для восстановления")
+                return True
+                
+            original_mode = self.original_proxy_settings.get('mode', 'none')
+            original_host = self.original_proxy_settings.get('http_host', '')
+            original_port = self.original_proxy_settings.get('http_port', '1080')
+            
+            print("🔄 Восстанавливаем оригинальные настройки прокси...")
+            print(f"   Режим: {original_mode}")
+            print(f"   Хост: {original_host}")
+            print(f"   Порт: {original_port}")
+            
+            # Применяем оригинальные настройки
+            if original_mode == 'manual':
+                # Восстанавливаем ручные настройки
+                subprocess.run([
+                    'gsettings', 'set', 'org.gnome.system.proxy', 'mode', 'manual'
+                ], check=False)
+                
+                subprocess.run([
+                    'gsettings', 'set', 'org.gnome.system.proxy.http', 'host', original_host
+                ], check=False)
+                subprocess.run([
+                    'gsettings', 'set', 'org.gnome.system.proxy.http', 'port', original_port
+                ], check=False)
+                
+                subprocess.run([
+                    'gsettings', 'set', 'org.gnome.system.proxy.https', 'host', original_host
+                ], check=False)
+                subprocess.run([
+                    'gsettings', 'set', 'org.gnome.system.proxy.https', 'port', original_port
+                ], check=False)
+                
+                # Восстанавливаем игнорируемые хосты если они были
+                if 'ignore_hosts' in self.original_proxy_settings:
+                    ignore_hosts = self.original_proxy_settings['ignore_hosts']
+                    if ignore_hosts:
+                        subprocess.run([
+                            'gsettings', 'set', 'org.gnome.system.proxy', 'ignore-hosts', 
+                            ignore_hosts
+                        ], check=False)
+                        
+            elif original_mode == 'auto':
+                # Восстанавливаем автоматический режим
+                subprocess.run([
+                    'gsettings', 'set', 'org.gnome.system.proxy', 'mode', 'auto'
+                ], check=False)
+                
+            else:
+                # Режим 'none' - отключаем прокси
+                subprocess.run([
+                    'gsettings', 'set', 'org.gnome.system.proxy', 'mode', 'none'
+                ], check=False)
+            
+            # Восстанавливаем переменные окружения
+            self.restore_original_environment()
+            
+            self.proxy_was_enabled_by_us = False
+            print("✅ Оригинальные настройки прокси восстановлены")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Ошибка восстановления настроек прокси: {e}")
+            return False
+
+    # Восстановление переменных окружения
+    def restore_original_environment(self):
+        """Восстановление оригинальных переменных окружения"""
+        try:
+            # Удаляем наш файл с настройками прокси
+            env_file = Path.home() / '.proxy_env'
+            if env_file.exists():
+                env_file.unlink()
+                print("✅ Удалены наши переменные окружения прокси")
+                
+            # TODO: Можно добавить восстановление оригинальных переменных окружения
+            # если они были сохранены
+            
+        except Exception as e:
+            print(f"⚠️ Ошибка восстановления переменных окружения: {e}")            
 
     def run_command(self, command):
         def run_in_thread():
@@ -1543,9 +1656,8 @@ class AdvancedTrayIndicator:
             pass
 
     def exit_app(self, widget):
-        """Выход из приложения с опциональным отключением прокси"""
+        """Выход из приложения с восстановлением прокси если нужно"""
         if self.current_params.get("auto_disable_proxy", False):
-            # Проверяем статус сервиса - если запущен, не отключаем прокси
             try:
                 result = subprocess.run(
                     ['systemctl', 'is-active', 'ciadpi.service'],
@@ -1553,12 +1665,12 @@ class AdvancedTrayIndicator:
                 )
                 service_running = result.stdout.strip() == 'active'
                 
-                if not service_running:
-                    # Сервис не запущен - отключаем прокси при выходе
-                    self.disable_system_proxy()
-                    self.show_notification("Выход", "Прокси отключен (сервис остановлен)")
+                if not service_running and self.proxy_was_enabled_by_us:
+                    # Сервис не запущен и мы включали прокси - восстанавливаем настройки
+                    self.restore_original_proxy_settings()
+                    self.show_notification("Выход", "Настройки прокси восстановлены")
                 else:
-                    print("⚠️ Сервис запущен - прокси не отключаем")
+                    print("ℹ️ Прокси настройки не изменялись или сервис запущен")
                     
             except Exception as e:
                 print(f"⚠️ Не удалось проверить статус сервиса: {e}")
