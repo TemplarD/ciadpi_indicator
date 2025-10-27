@@ -616,7 +616,7 @@ class AdvancedTrayIndicator:
         
         # Настройки
         settings_item = Gtk.MenuItem(label="⚙️ Настройки параметров")
-        settings_item.connect("activate")
+        settings_item.connect("activate", self.show_settings)
         menu.append(settings_item)
         
         proxy_item = Gtk.MenuItem(label="🔌 Настройки прокси")
@@ -625,7 +625,7 @@ class AdvancedTrayIndicator:
 
         # БЕЛЫЙ СПИСОК
         whitelist_item = Gtk.MenuItem(label="📝 Белый список")
-        whitelist_item.connect("activate")
+        whitelist_item.connect("activate", self.show_whitelist_dialog)
         menu.append(whitelist_item)        
         
         menu.append(Gtk.SeparatorMenuItem())
