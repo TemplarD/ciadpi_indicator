@@ -85,15 +85,15 @@ class CIAutoSearch:
             self.current_test_url = (self.current_test_url + 1) % len(self.test_urls)
 
             # Пропускаем тестирование если URL в белом списке
-            if self.whitelist_manager.is_whitelisted(test_url):
-                return True, 0.1, test_url  # Быстрый успех для белого списка            
+            if hasattr(self, 'whitelist_manager') and self.whitelist_manager.is_whitelisted(test_url):
+                return True, 0.1, test_url  # Быстрый успех для белого списка
 
             start_time = time.time()
             result = subprocess.run([
                 'curl', '-s', '-o', '/dev/null', '-w', '%{http_code}',
                 '--connect-timeout', '5', '--max-time', '8',
                 '--retry', '2', '--retry-delay', '1',
-                self.test_url
+                test_url  # ИСПРАВЛЕНО: было self.test_url
             ], capture_output=True, text=True, timeout=timeout)
             
             speed = time.time() - start_time
@@ -102,7 +102,7 @@ class CIAutoSearch:
             return success, speed, test_url
             
         except subprocess.TimeoutExpired:
-            return False, timeout
+            return False, timeout, test_url
         except Exception as e:
             self.logger.error(f"Ошибка тестирования: {e}")
             return False, timeout, test_url

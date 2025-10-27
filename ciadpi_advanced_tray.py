@@ -16,12 +16,15 @@ gi.require_version('AppIndicator3', '0.1')
 from gi.repository import Gtk, AppIndicator3, GLib
 
 try:
+    import sys
+    sys.path.append(str(Path.home() / '.local' / 'bin'))
     from ciadpi_whitelist import WhitelistManager
     WHITELIST_AVAILABLE = True
+    print("✅ Модуль белого списка загружен")
 except ImportError as e:
-    print(f"Модуль белого списка не доступен: {e}")
+    print(f"❌ Модуль белого списка не доступен: {e}")
     WHITELIST_AVAILABLE = False
-    WhitelistManager = None
+    WhitelistManager = None    
 
 # Отладочная информация
 DEBUG_LOG = Path.home() / '.config' / 'ciadpi' / 'indicator_debug.log'
@@ -230,7 +233,7 @@ class AdvancedTrayIndicator:
             
             # Останавливаем сервис
             subprocess.run(['sudo', 'systemctl', 'stop', 'ciadpi.service'], 
-                          check=False, timeout=10)
+                        check=False, timeout=10)
             
             # Создаем временный override файл
             override_dir = Path('/etc/systemd/system/ciadpi.service.d')
@@ -239,13 +242,19 @@ class AdvancedTrayIndicator:
             # Создаем директорию если нет
             subprocess.run(['sudo', 'mkdir', '-p', str(override_dir)])
             
+            # Получаем путь к byedpi
+            byedpi_dir = Path.home() / 'byedpi'
+            ciadpi_binary = byedpi_dir / 'ciadpi'
+            
             # Создаем override конфиг
             override_content = f"""[Service]
-ExecStart=
-ExecStart=/home/templard/byedpi/ciadpi {new_params}
-Restart=always
-RestartSec=5
-"""
+    ExecStart=
+    ExecStart={ciadpi_binary} {new_params}
+    Restart=always
+    RestartSec=5
+    User={os.environ.get('USER', 'templard')}
+    WorkingDirectory={byedpi_dir}
+    """
             
             # Записываем временный файл
             temp_file = Path('/tmp/ciadpi_override.conf')
@@ -253,8 +262,8 @@ RestartSec=5
                 f.write(override_content)
             
             # Копируем с правами root
-            subprocess.run(['sudo', 'cp', str(temp_file), str(override_file)])
-            subprocess.run(['sudo', 'systemctl', 'daemon-reload'])
+            subprocess.run(['sudo', 'cp', str(temp_file), str(override_file)], check=True)
+            subprocess.run(['sudo', 'systemctl', 'daemon-reload'], check=True)
             
             # Обновляем конфиг
             self.current_params["current_params"] = new_params
@@ -262,19 +271,22 @@ RestartSec=5
             self.save_config()
             
             # Запускаем сервис
-            subprocess.run(['sudo', 'systemctl', 'start', 'ciadpi.service'])
+            subprocess.run(['sudo', 'systemctl', 'start', 'ciadpi.service'], check=True)
             
             print("✅ Параметры успешно обновлены")
             return True
             
-        except Exception as e:
-            print(f"❌ Общая ошибка: {e}")
+        except subprocess.CalledProcessError as e:
+            print(f"❌ Ошибка выполнения команды: {e}")
             # Пытаемся восстановить сервис
             try:
                 subprocess.run(['sudo', 'systemctl', 'daemon-reload'])
                 subprocess.run(['sudo', 'systemctl', 'start', 'ciadpi.service'])
             except:
                 pass
+            return False
+        except Exception as e:
+            print(f"❌ Общая ошибка: {e}")
             return False
         
     # Методы для работы с белым списком:
@@ -1028,21 +1040,54 @@ RestartSec=5
     def restart_service(self, widget):
         self.run_command("systemctl restart ciadpi.service")
 
+    def validate_params(self, params):
+        """Валидация параметров ciadpi"""
+        if not params or not params.strip():
+            return False, "Параметры не могут быть пустыми"
+        
+        # Проверяем наличие обязательных параметров
+        params_list = params.split()
+        
+        # Проверяем конфликтующие параметры
+        if '-A' in params_list and '-o' not in params_list:
+            return False, "Автоматический режим (-A) требует указания методов обхода (-o)"
+        
+        # Проверяем порт (если указан)
+        if '-p' in params_list:
+            port_index = params_list.index('-p') + 1
+            if port_index < len(params_list):
+                try:
+                    port = int(params_list[port_index])
+                    if port < 1 or port > 65535:
+                        return False, f"Некорректный порт: {port}"
+                except ValueError:
+                    return False, "Порт должен быть числом"
+        
+        return True, "OK"        
+
     def apply_params(self, params):
-        """Применение новых параметров"""
+        """Применение новых параметров с валидацией"""
+        # Валидируем параметры
+        is_valid, message = self.validate_params(params)
+        if not is_valid:
+            self.show_notification("Ошибка параметров", message)
+            return False
+        
         if self.update_service_params(params):
             self.show_notification("Параметры", "Параметры обновлены. Перезапустите сервис.")
             self.restart_service(None)
             self.update_status()
+            return True
         else:
             self.show_notification("Ошибка", "Не удалось обновить параметры")
+            return False
 
     def show_settings(self, widget):
         """Диалог настроек параметров"""
         dialog = Gtk.Dialog(title="Настройки параметров CIADPI", flags=0)
         dialog.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
-                         Gtk.STOCK_OK, Gtk.ResponseType.OK)
-        dialog.set_default_size(600, 150)
+                        Gtk.STOCK_OK, Gtk.ResponseType.OK)
+        dialog.set_default_size(600, 200)
 
         content_area = dialog.get_content_area()
         
@@ -1058,8 +1103,19 @@ RestartSec=5
         entry.set_text(current_params)
         entry.set_width_chars(60)
         
+        # Добавляем подсказку с примерами
+        examples_label = Gtk.Label()
+        examples_label.set_markup(
+            "<small>Примеры:\n"
+            "• <tt>-o1 -o25+s -T3 -At o--tlsrec 1+s</tt>\n"
+            "• <tt>-o2 -o15+s -T2 -At o--tlsrec</tt>\n"
+            "• <tt>-o1 -o5+s -T1 -At</tt></small>"
+        )
+        examples_label.set_sensitive(False)
+        
         box.pack_start(label, False, False, 0)
         box.pack_start(entry, False, False, 0)
+        box.pack_start(examples_label, False, False, 0)
         
         content_area.pack_start(box, True, True, 0)
         content_area.show_all()
@@ -1069,7 +1125,7 @@ RestartSec=5
         if response == Gtk.ResponseType.OK:
             new_params = entry.get_text().strip()
             if new_params and new_params != current_params:
-                self.apply_params(new_params)
+                self.apply_params(new_params)  # Используем новый метод с валидацией
         
         dialog.destroy()
 

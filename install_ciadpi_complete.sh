@@ -229,6 +229,7 @@ install_python_scripts() {
         [ -f "ciadpi_launcher.sh" ] && cp "ciadpi_launcher.sh" "$HOME/.local/bin/" && chmod +x "$HOME/.local/bin/ciadpi_launcher.sh"
         [ -f "ciadpi_autosearch.py" ] && cp "ciadpi_autosearch.py" "$HOME/.local/bin/"
         [ -f "ciadpi_param_generator.py" ] && cp "ciadpi_param_generator.py" "$HOME/.local/bin/"
+        [ -f "ciadpi_whitelist.py" ] && cp "ciadpi_whitelist.py" "$HOME/.local/bin/"  # ДОБАВЛЕНО
         
     else
         # УДАЛЕННАЯ установка - скачиваем с GitHub
@@ -244,6 +245,7 @@ install_python_scripts() {
         
         wget -q -O "$HOME/.local/bin/ciadpi_autosearch.py" "$BASE_URL/ciadpi_autosearch.py" 2>/dev/null || warn "Autosearch script not available"
         wget -q -O "$HOME/.local/bin/ciadpi_param_generator.py" "$BASE_URL/ciadpi_param_generator.py" 2>/dev/null || warn "Param generator script not available"
+        wget -q -O "$HOME/.local/bin/ciadpi_whitelist.py" "$BASE_URL/ciadpi_whitelist.py" 2>/dev/null || warn "Whitelist script not available"  # ДОБАВЛЕНО
     fi
     
     log "Python scripts installed to ~/.local/bin/"
