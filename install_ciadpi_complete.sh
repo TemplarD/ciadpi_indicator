@@ -66,7 +66,8 @@ install_byedpi() {
     fi
 
     log "Building ciadpi binary..."
-    gcc -O3 -o ciadpi main.c || error "Failed to build ciadpi"
+    # Компилируем все C файлы вместе
+    gcc -O3 -o ciadpi *.c || error "Failed to build ciadpi"
     
     if [ ! -f "ciadpi" ]; then
         error "ciadpi binary was not created"
