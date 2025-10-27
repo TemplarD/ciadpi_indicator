@@ -31,6 +31,13 @@ Systemd service for automatic management
 
 Desktop integration with autostart
 
+## Quick Uninstall
+```bash
+wget -O uninstall_ciadpi.sh https://raw.githubusercontent.com/templard/ciadpi_indicator/master/uninstall_ciadpi_complete.sh
+chmod +x uninstall_ciadpi.sh
+./uninstall_ciadpi.sh
+```
+
 ## Usage
 After installation, the CIADPI indicator will auto-start. Look for the network icon in your system tray.
 
