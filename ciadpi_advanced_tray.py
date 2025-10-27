@@ -410,7 +410,7 @@ class AdvancedTrayIndicator:
         # TODO: Добавить проверку IP и CIDR при необходимости
         return False
 
-    def show_whitelist_dialog(self, widget):
+    def show_whitelist_dialog(self, widget=None):
         """Диалог управления белым списком"""
         dialog = Gtk.Dialog(title="Управление белым списком", flags=0)
         dialog.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
@@ -616,7 +616,7 @@ class AdvancedTrayIndicator:
         
         # Настройки
         settings_item = Gtk.MenuItem(label="⚙️ Настройки параметров")
-        settings_item.connect("activate", self.show_settings)
+        settings_item.connect("activate")
         menu.append(settings_item)
         
         proxy_item = Gtk.MenuItem(label="🔌 Настройки прокси")
@@ -625,7 +625,7 @@ class AdvancedTrayIndicator:
 
         # БЕЛЫЙ СПИСОК
         whitelist_item = Gtk.MenuItem(label="📝 Белый список")
-        whitelist_item.connect("activate", self.show_whitelist_dialog)
+        whitelist_item.connect("activate")
         menu.append(whitelist_item)        
         
         menu.append(Gtk.SeparatorMenuItem())
@@ -1164,7 +1164,7 @@ class AdvancedTrayIndicator:
         
         return True, ""
 
-    def show_settings(self, widget):
+    def show_settings(self, widget=None):
         """Диалог настроек параметров"""
         dialog = Gtk.Dialog(title="Настройки параметров CIADPI", flags=0)
         dialog.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
