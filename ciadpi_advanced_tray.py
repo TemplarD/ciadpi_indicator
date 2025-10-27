@@ -861,7 +861,7 @@ class AdvancedTrayIndicator:
         auto_disable_check = Gtk.CheckButton(label="❌ Автоматически отключать прокси при выходе")
         auto_disable_check.set_active(self.current_params.get("auto_disable_proxy", False))
         auto_disable_check.set_tooltip_text("При остановке сервиса прокси будет автоматически отключен в системе")
-        
+                
         # Добавляем в UI
         box.pack_start(auto_disable_check, False, False, 0)                
         box.pack_start(mode_label, False, False, 0)
@@ -887,6 +887,9 @@ class AdvancedTrayIndicator:
                 self.show_notification("Ошибка", "Порт должен быть числом")
                 dialog.destroy()
                 return
+            
+            self.current_params["auto_disable_proxy"] = auto_disable_check.get_active()
+            print(f"💾 Сохраняем auto_disable_proxy = {self.current_params['auto_disable_proxy']}")            
             
             # СОХРАНЯЕМ НАШИ НАСТРОЙКИ В КОНФИГ
             self.current_params["proxy_enabled"] = selected_mode != 'none'
