@@ -60,13 +60,13 @@ install_byedpi() {
         cd "$byedpi_dir"
     fi
     
-    # Check if ciadpi.c exists
-    if [ ! -f "ciadpi.c" ]; then
-        error "ciadpi.c not found in byedpi repository"
+    # Check if main.c exists (new structure)
+    if [ ! -f "main.c" ]; then
+        error "main.c not found in byedpi repository"
     fi
-    
+
     log "Building ciadpi binary..."
-    gcc -O3 -o ciadpi ciadpi.c || error "Failed to build ciadpi"
+    gcc -O3 -o ciadpi main.c || error "Failed to build ciadpi"
     
     if [ ! -f "ciadpi" ]; then
         error "ciadpi binary was not created"
