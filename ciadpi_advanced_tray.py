@@ -227,42 +227,72 @@ class AdvancedTrayIndicator:
             return self.default_params
 
     def update_service_params(self, new_params):
-        """Обновление параметров в systemd сервисе"""
+        """Обновление параметров в systemd сервисе - УНИВЕРСАЛЬНАЯ ВЕРСИЯ"""
         try:
             print(f"🔄 Обновление параметров: {new_params}")
             
-            # Останавливаем сервис
-            subprocess.run(['sudo', 'systemctl', 'stop', 'ciadpi.service'], 
-                        check=False, timeout=10)
-            
-            # Создаем временный override файл
-            override_dir = Path('/etc/systemd/system/ciadpi.service.d')
-            override_file = override_dir / 'override.conf'
-            
-            # Создаем директорию если нет
-            subprocess.run(['sudo', 'mkdir', '-p', str(override_dir)])
-            
-            # Получаем путь к byedpi
-            byedpi_dir = Path.home() / 'byedpi'
+            # Получаем данные пользователя динамически
+            username = os.environ.get('USER')
+            home_dir = Path.home()
+            byedpi_dir = home_dir / 'byedpi'
             ciadpi_binary = byedpi_dir / 'ciadpi'
             
-            # Создаем override конфиг
-            override_content = f"""[Service]
-    ExecStart=
-    ExecStart={ciadpi_binary} {new_params}
-    Restart=always
-    RestartSec=5
-    User={os.environ.get('USER', 'templard')}
+            # Проверяем что бинарник существует
+            if not ciadpi_binary.exists():
+                error_msg = f"Бинарник ciadpi не найден: {ciadpi_binary}"
+                print(f"❌ {error_msg}")
+                self.show_notification("Ошибка", error_msg)
+                return False
+            
+            # Останавливаем сервис
+            print("⏹️ Останавливаем сервис...")
+            stop_result = subprocess.run(
+                ['sudo', 'systemctl', 'stop', 'ciadpi.service'], 
+                capture_output=True, text=True, timeout=10
+            )
+            
+            if stop_result.returncode != 0:
+                print(f"⚠️ Предупреждение при остановке: {stop_result.stderr}")
+            
+            time.sleep(2)
+            
+            # Удаляем override директорию если есть (избегаем конфликтов)
+            override_dir = Path('/etc/systemd/system/ciadpi.service.d')
+            if override_dir.exists():
+                subprocess.run(['sudo', 'rm', '-rf', str(override_dir)], check=False)
+                print("🗑️ Удалена override директория")
+            
+            # Создаем service файл с динамическими путями
+            service_content = f"""[Unit]
+    Description=CIADPI DPI Bypass Service
+    After=network.target
+    Wants=network.target
+
+    [Service]
+    Type=simple
+    User={username}
     WorkingDirectory={byedpi_dir}
+    ExecStart={ciadpi_binary} {new_params}
+    Restart=on-failure
+    RestartSec=5
+    TimeoutStartSec=30
+
+    [Install]
+    WantedBy=multi-user.target
     """
             
             # Записываем временный файл
-            temp_file = Path('/tmp/ciadpi_override.conf')
+            temp_file = Path('/tmp/ciadpi_temp.service')
             with open(temp_file, 'w', encoding='utf-8') as f:
-                f.write(override_content)
+                f.write(service_content)
             
             # Копируем с правами root
-            subprocess.run(['sudo', 'cp', str(temp_file), str(override_file)], check=True)
+            print("📝 Обновляем service файл...")
+            copy_result = subprocess.run(
+                ['sudo', 'cp', str(temp_file), '/etc/systemd/system/ciadpi.service'],
+                capture_output=True, text=True, check=True
+            )
+            
             subprocess.run(['sudo', 'systemctl', 'daemon-reload'], check=True)
             
             # Обновляем конфиг
@@ -271,22 +301,49 @@ class AdvancedTrayIndicator:
             self.save_config()
             
             # Запускаем сервис
-            subprocess.run(['sudo', 'systemctl', 'start', 'ciadpi.service'], check=True)
+            print("▶️ Запускаем сервис...")
+            start_result = subprocess.run(
+                ['sudo', 'systemctl', 'start', 'ciadpi.service'],
+                capture_output=True, text=True, check=True
+            )
             
-            print("✅ Параметры успешно обновлены")
-            return True
+            # Проверяем статус
+            time.sleep(3)
+            status_result = subprocess.run(
+                ['systemctl', 'is-active', 'ciadpi.service'],
+                capture_output=True, text=True
+            )
+            
+            if status_result.stdout.strip() == 'active':
+                print("✅ Параметры успешно обновлены")
+                self.show_notification("Успех", "Параметры обновлены и сервис запущен")
+                return True
+            else:
+                # Если сервис не запустился, показываем ошибку
+                error_msg = "Сервис не запустился после обновления параметров"
+                print(f"❌ {error_msg}")
+                
+                # Получаем последние логи для диагностики
+                log_result = subprocess.run(
+                    ['journalctl', '-u', 'ciadpi.service', '-n', '10', '--no-pager'],
+                    capture_output=True, text=True
+                )
+                print("Последние логи сервиса:")
+                print(log_result.stdout)
+                
+                self.show_notification("Ошибка", f"{error_msg}\nПроверьте логи")
+                return False
             
         except subprocess.CalledProcessError as e:
-            print(f"❌ Ошибка выполнения команды: {e}")
-            # Пытаемся восстановить сервис
-            try:
-                subprocess.run(['sudo', 'systemctl', 'daemon-reload'])
-                subprocess.run(['sudo', 'systemctl', 'start', 'ciadpi.service'])
-            except:
-                pass
+            error_msg = f"Ошибка выполнения команды: {e}\nStderr: {e.stderr}"
+            print(f"❌ {error_msg}")
+            self.show_notification("Ошибка", "Не удалось выполнить системную команду")
             return False
+            
         except Exception as e:
-            print(f"❌ Общая ошибка: {e}")
+            error_msg = f"Общая ошибка: {e}"
+            print(f"❌ {error_msg}")
+            self.show_notification("Ошибка", f"Не удалось обновить параметры: {e}")
             return False
         
     # Методы для работы с белым списком:
