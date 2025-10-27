@@ -2,6 +2,7 @@
 
 ![GitHub](https://img.shields.io/badge/platform-linux-blue)
 ![GitHub](https://img.shields.io/badge/ubuntu-20.04%2B-orange)
+![License](https://img.shields.io/badge/License-MIT-blue.svg) 
 
 Complete DPI bypass solution with system tray indicator. Includes byedpi and management interface.
 
@@ -149,7 +150,7 @@ journalctl -u ciadpi.service -f
 
 #### License
 
-![License](https://img.shields.io/badge/License-MIT-blue.svg) MIT License
+MIT License
 
 #### Repository Structure
 
