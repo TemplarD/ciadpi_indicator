@@ -1,11 +1,11 @@
-# CIADPI Complete Solution
+### CIADPI Complete Solution
 
 ![GitHub](https://img.shields.io/badge/platform-linux-blue)
 ![GitHub](https://img.shields.io/badge/ubuntu-20.04%2B-orange)
 
 Complete DPI bypass solution with system tray indicator. Includes byedpi and management interface.
 
-## Features
+#### Features
 
 - 🛡️ **byedpi** - DPI bypass core (using [hufrea/byedpi](https://github.com/hufrea/byedpi))
 - 🖥️ **System Tray** - Easy management
@@ -14,7 +14,7 @@ Complete DPI bypass solution with system tray indicator. Includes byedpi and man
 - 🔌 **Proxy Configuration** - System-wide proxy
 - 🚀 **Auto-Start** - Starts with system
 
-## Quick Install
+#### Quick Install
 
 ```bash
 wget -O install_ciadpi.sh https://raw.githubusercontent.com/templard/ciadpi_indicator/master/install_ciadpi_complete.sh
@@ -22,7 +22,7 @@ chmod +x install_ciadpi.sh
 ./install_ciadpi.sh
 ```
 
-## Quick Uninstall
+#### Quick Uninstall
 
 ```bash
 wget -O uninstall_ciadpi.sh https://raw.githubusercontent.com/templard/ciadpi_indicator/master/uninstall_ciadpi_complete.sh
@@ -30,7 +30,7 @@ chmod +x uninstall_ciadpi.sh
 ./uninstall_ciadpi.sh
 ```
 
-## About byedpi
+#### About byedpi
 
 This solution uses **[byedpi](https://github.com/hufrea/byedpi)** as the core DPI bypass engine. byedpi is automatically downloaded and compiled during installation.
 
@@ -47,7 +47,7 @@ byedpi features:
 - **Systemd service** for automatic management
 - **Desktop integration** with autostart
 
-## Usage
+#### Usage
 
 After installation, the CIADPI indicator will auto-start. Look for the network icon in your system tray.
 
@@ -62,20 +62,21 @@ systemctl stop ciadpi.service
 systemctl status ciadpi.service
 ```
 
-### Proxy Configuration
+#### Enhanced Proxy Management
 
 For applications to use the DPI bypass, you need to configure proxy settings:
 
 **Option 1: System-wide proxy (recommended)**
 - Open CIADPI indicator → Proxy Settings
 - Set mode to "Manual"
-- Leave host field **empty** (uses localhost)
+- Leave host field **empty**
 - Set port to 1080
 
 **Option 2: Browser proxy**
 - Firefox: Settings → Network Settings → Manual proxy configuration
 - Chrome: Use --proxy-server=127.0.0.1:1080 launch flag
 - Set HTTP/HTTPS proxy to 127.0.0.1:1080
+- Try with host field **empty**, only port, if not working
 
 **Option 3: Environment variables**
 ```
@@ -83,14 +84,52 @@ export http_proxy=http://127.0.0.1:1080
 export https_proxy=http://127.0.0.1:1080
 ```
 
-## Supported Systems
+## 🔧 Proxy Modes:
+
+- **Manual Proxy**: Set specific host and port (empty host = port-only configuration)
+- **Automatic (PAC)**: Use Proxy Auto-Configuration URL
+- **Disabled**: No proxy
+
+## 💾 Configuration Persistence:
+
+All proxy settings are stored in `~/.config/ciadpi/config.json`:
+```json
+{
+  "proxy_enabled": true,
+  "proxy_mode": "manual",
+  "proxy_host": "127.0.0.1",
+  "proxy_port": "1080",
+  "auto_disable_proxy": true,
+  "we_changed_proxy": true
+}
+```
+
+## 🛡️ Whitelist Support:
+
+- Exclude specific domains/IPs from proxy routing
+- Supports exact domains (`example.com`) and wildcards (`*.example.com`)
+- CIDR notation for IP ranges (`192.168.1.0/24`)
+
+## Usage Tips:
+For Mobile Users: Enable "Auto-disable proxy" to automatically restore internet when stopping the service
+For Always-On Users: Disable "Auto-disable proxy" to maintain proxy settings permanently
+For Development: Use whitelist to exclude local domains from proxy routing
+
+## 🎯 Key Features:
+
+- **Automatic Proxy Application** - Applies your proxy settings from config on program startup
+- **Smart State Tracking** - Remembers if proxy settings were changed by the application
+- **Auto-Restore Option** - Optional automatic restoration of original system proxy when service stops
+- **Settings Persistence** - All proxy configurations survive application restarts
+
+#### Supported Systems
 
 - Ubuntu 20.04+
 - Debian 11+ 
 - Linux Mint 20+
 - Other systemd-based distributions
 
-## Troubleshooting
+#### Troubleshooting
 
 **Service not starting?**
 ```bash
@@ -108,11 +147,11 @@ journalctl -u ciadpi.service -f
 - Check proxy settings in browser/system
 - Try using empty host field in proxy settings
 
-## License
+#### License
 
 MIT License
 
-## Repository Structure
+#### Repository Structure
 
 ```
 ciadpi-complete/
