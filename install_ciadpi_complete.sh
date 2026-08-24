@@ -375,36 +375,58 @@ EOF
     fi    
 }
 
-# Setup permissions
+# Setup permissions (одноразовый запрос пароля при установке)
 setup_permissions() {
     log "Setting up permissions..."
     
     # Add user to systemd journal group for log access
     sudo usermod -a -G systemd-journal "$USER" || warn "Failed to add user to systemd-journal group"
     
-    # Allow user to manage ciadpi service without password
-    # Определяем реальный путь systemctl (на новых системах /usr/bin/systemctl)
+    # Полная настройка беспарольного управления: sudoers + polkit
+    # ciadpi_privileges.sh сам определяет путь systemctl и валидирует sudoers
+    local priv_script=""
+    if [ -f "ciadpi_privileges.sh" ]; then
+        priv_script="$(pwd)/ciadpi_privileges.sh"
+    elif [ -f "$HOME/.local/bin/ciadpi_privileges.sh" ]; then
+        priv_script="$HOME/.local/bin/ciadpi_privileges.sh"
+    else
+        # Удалённая установка: скачиваем скрипт настройки
+        wget -q -O /tmp/ciadpi_privileges.sh \
+            "https://raw.githubusercontent.com/TemplarD/ciadpi_indicator/master/ciadpi_privileges.sh" \
+            && priv_script="/tmp/ciadpi_privileges.sh"
+    fi
+    
+    if [ -n "$priv_script" ] && [ -f "$priv_script" ]; then
+        chmod +x "$priv_script" 2>/dev/null || true
+        if sudo -E bash "$priv_script"; then
+            log "Passwordless service management configured"
+            return 0
+        fi
+        warn "ciadpi_privileges.sh failed, falling back to minimal sudoers rule"
+    fi
+    
+    # Fallback: минимальное правило как раньше
     local systemctl_bin
     systemctl_bin=$(command -v systemctl || echo "/usr/bin/systemctl")
     
     echo "$USER ALL=(ALL) NOPASSWD: ${systemctl_bin} start ciadpi.service, ${systemctl_bin} stop ciadpi.service, ${systemctl_bin} restart ciadpi.service, ${systemctl_bin} status ciadpi.service, ${systemctl_bin} enable ciadpi.service, ${systemctl_bin} disable ciadpi.service, ${systemctl_bin} daemon-reload" | sudo tee /etc/sudoers.d/ciadpi > /dev/null
-    
-    # Дублируем правило для старого пути /bin/systemctl (совместимость)
-    if [ "$systemctl_bin" != "/bin/systemctl" ] && [ -x "/bin/systemctl" ]; then
-        echo "$USER ALL=(ALL) NOPASSWD: /bin/systemctl start ciadpi.service, /bin/systemctl stop ciadpi.service, /bin/systemctl restart ciadpi.service, /bin/systemctl status ciadpi.service" | sudo tee -a /etc/sudoers.d/ciadpi > /dev/null
-    fi
-    
     sudo chmod 440 /etc/sudoers.d/ciadpi
     
-    # Валидируем sudoers чтобы не сломать систему
     if ! sudo visudo -c -f /etc/sudoers.d/ciadpi &>/dev/null; then
         warn "sudoers файл невалиден — удаляем во избежание блокировки"
         sudo rm -f /etc/sudoers.d/ciadpi
-    else
-        log "sudoers правила установлены (${systemctl_bin})"
     fi
     
-    log "Permissions configured"
+    log "Permissions configured (fallback mode)"
+}
+
+# Install privileges script for later re-use by the indicator
+install_privileges_script() {
+    if [ -f "ciadpi_privileges.sh" ]; then
+        cp "ciadpi_privileges.sh" "$HOME/.local/bin/"
+        chmod +x "$HOME/.local/bin/ciadpi_privileges.sh"
+        log "Privileges script installed to ~/.local/bin/"
+    fi
 }
 
 # Enable and start service
@@ -505,6 +527,7 @@ main() {
     check_dependencies
     install_service
     install_python_scripts
+    install_privileges_script
     install_desktop_files
     setup_config
     setup_permissions

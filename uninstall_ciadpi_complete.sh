@@ -111,8 +111,9 @@ remove_system_files() {
     sudo rm -f /etc/systemd/system/ciadpi.service
     sudo rm -rf /etc/systemd/system/ciadpi.service.d 2>/dev/null
     
-    # Удаляем права sudo
+    # Удаляем права sudo и polkit-правило
     sudo rm -f /etc/sudoers.d/ciadpi
+    sudo rm -f /etc/polkit-1/rules.d/49-ciadpi-indicator.rules
     
     # Перезагружаем systemd
     sudo systemctl daemon-reload

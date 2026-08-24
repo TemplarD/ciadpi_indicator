@@ -275,12 +275,17 @@ class AdvancedTrayIndicator:
     def _systemctl(self, *args):
         """Запуск systemctl для ciadpi.service с fallback на pkexec (GUI-пароль).
         Возвращает (ok, stderr)."""
-        # 1) Пробуем напрямую (работает при NOPASSWD sudoers или правах)
+        # 1) Пробуем напрямую (работает при NOPASSWD sudoers или polkit-правиле)
         try:
             r = subprocess.run(['systemctl', *args],
                                capture_output=True, text=True, timeout=15)
             if r.returncode == 0:
                 return True, ""
+            # Команды чтения (is-active/show/status) не требуют прав:
+            # ненулевой код = валидный ответ сервиса, не ошибка доступа
+            if args and args[0] in ('is-active', 'show', 'status',
+                                    'is-enabled', 'is-failed'):
+                return False, r.stdout.strip() or r.stderr.strip()
         except Exception:
             pass
         # 2) sudo без пароля
@@ -295,11 +300,137 @@ class AdvancedTrayIndicator:
         try:
             r = subprocess.run(['pkexec', 'systemctl', *args],
                                capture_output=True, text=True, timeout=120)
-            return r.returncode == 0, r.stderr.strip()
+            if r.returncode == 0:
+                return True, ""
+        except FileNotFoundError:
+            pass
+        except subprocess.TimeoutExpired:
+            pass
+
+        # 4) Не удалось — предлагаем одноразовую настройку прав
+        self._offer_privileges_setup()
+        return False, "Требуются права. Настройте беспарольный доступ через меню «🔑 Права доступа»"
+
+    def _offer_privileges_setup(self):
+        """Однократно за сессию предлагает настроить беспарольный доступ."""
+        if getattr(self, '_privileges_offer_shown', False):
+            return
+        self._privileges_offer_shown = True
+        GLib.idle_add(
+            self.show_notification,
+            "Требуется настройка",
+            "Чтобы не вводить пароль каждый раз: меню → 🔑 Права доступа"
+        )
+
+    def show_privileges_dialog(self, widget=None):
+        """Диалог одноразовой настройки беспарольного управления сервисом."""
+        script_src = Path(__file__).resolve()
+        dialog = Gtk.Dialog(title="Права доступа CIADPI", flags=0)
+        dialog.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL)
+        dialog.set_default_size(560, 300)
+
+        box = dialog.get_content_area()
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        vbox.set_margin_top(12)
+        vbox.set_margin_bottom(12)
+        vbox.set_margin_start(12)
+        vbox.set_margin_end(12)
+
+        info = Gtk.Label()
+        info.set_markup(
+            "<b>Беспарольное управление сервисом</b>\n\n"
+            "Сейчас при изменении параметров система может запрашивать пароль.\n"
+            "Одноразовая настройка добавит правила, разрешающие управлять\n"
+            "<b>только сервисом ciadpi.service</b> без пароля (sudoers + polkit).\n\n"
+            "Пароль будет запрошен <b>один раз</b> — сейчас."
+        )
+        info.set_xalign(0)
+        info.set_line_wrap(True)
+        vbox.pack_start(info, False, False, 0)
+
+        btn_apply = Gtk.Button(label="🔑 Настроить (запросит пароль один раз)")
+        vbox.pack_start(btn_apply, False, False, 0)
+
+        status = Gtk.Label(label="")
+        status.set_xalign(0)
+        status.set_line_wrap(True)
+        vbox.pack_start(status, False, False, 0)
+
+        box.pack_start(vbox, True, True, 0)
+        box.show_all()
+
+        def run_setup(btn):
+            btn_apply.set_sensitive(False)
+            status.set_text("Выполняется настройка... (смотрите запрос пароля)")
+
+            def work():
+                ok, msg = self._setup_privileges(script_src)
+
+                def finish():
+                    btn_apply.set_sensitive(True)
+                    if ok:
+                        status.set_text("✅ Готово! Пароль больше не потребуется.")
+                        self.show_notification("Готово", "Беспарольное управление настроено")
+                    else:
+                        status.set_text(f"❌ Ошибка: {msg}")
+                    return False
+                GLib.idle_add(finish)
+
+            threading.Thread(target=work, daemon=True).start()
+
+        def on_copy_cmd(btn):
+            clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+            clipboard.set_text(
+                f'pkexec env CIADPI_USER="$USER" bash '
+                f"{script_src.parent / 'ciadpi_privileges.sh'}", -1)
+            self.show_notification("Скопировано",
+                                   "Команда вставлена в буфер обмена")
+
+        btn_copy = Gtk.Button(label="📋 Скопировать команду для терминала")
+        btn_copy.connect("clicked", on_copy_cmd)
+        vbox.pack_start(btn_copy, False, False, 0)
+        box.show_all()
+
+        btn_apply.connect("clicked", run_setup)
+        dialog.connect("response", lambda d, r: d.destroy())
+        dialog.show_all()
+
+    def _setup_privileges(self, script_src):
+        """Запуск ciadpi_privileges.sh через pkexec. Возвращает (ok, message)."""
+        src_script = script_src.parent / 'ciadpi_privileges.sh'
+        installed = Path.home() / '.local' / 'bin' / 'ciadpi_privileges.sh'
+
+        # Берём скрипт из ~/.local/bin если он там есть, иначе из папки проекта
+        use_script = installed if installed.exists() else src_script
+
+        if not use_script.exists():
+            # Скрипта нет нигде — создаём в ~/.local/bin из встроенного шаблона
+            installed.parent.mkdir(exist_ok=True)
+            try:
+                import shutil as _shutil
+                _shutil.copy(src_script, installed)
+                os.chmod(installed, 0o755)
+                use_script = installed
+            except Exception:
+                pass
+
+        try:
+            r = subprocess.run(
+                ['pkexec', 'env', f'CIADPI_USER={os.environ.get("USER", "")}',
+                 'bash', str(use_script)],
+                capture_output=True, text=True, timeout=180
+            )
+            if r.returncode == 0:
+                return True, ""
+            err = (r.stderr or '').strip()
+            if 'dismissed' in err.lower() or r.returncode == 126:
+                return False, "Запрос пароля отменён"
+            return False, err or f"код {r.returncode}"
         except FileNotFoundError:
             return False, "pkexec не найден"
         except subprocess.TimeoutExpired:
-            return False, "Таймаут выполнения команды"
+            return False, "Таймаут выполнения"
+
 
     def update_service_params(self, new_params, apply_proxy=True):
         """Обновление параметров в systemd сервисе - УНИВЕРСАЛЬНАЯ ВЕРСИЯ"""
@@ -372,16 +503,25 @@ class AdvancedTrayIndicator:
             with open(temp_file, 'w', encoding='utf-8') as f:
                 f.write(service_content)
 
-            # Копируем с правами root: сначала прямой путь, потом pkexec
+            # Копируем с правами root:
+            #  1) sudo tee (покрыт sudoers из ciadpi_privileges.sh — без пароля)
+            #  2) прямой cp (если вдруг права уже есть)
+            #  3) pkexec cp (запросит пароль через GUI)
             print("📝 Обновляем service файл...")
             copy_ok = False
             for cmd in (
-                ['sudo', '-n', 'cp', str(temp_file), '/etc/systemd/system/ciadpi.service'],
+                ['sudo', '-n', 'tee', '/etc/systemd/system/ciadpi.service'],
                 ['cp', str(temp_file), '/etc/systemd/system/ciadpi.service'],
                 ['pkexec', 'cp', str(temp_file), '/etc/systemd/system/ciadpi.service'],
             ):
                 try:
-                    r = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+                    if 'tee' in cmd:
+                        # содержимое передаём через stdin
+                        with open(temp_file, 'rb') as f_in:
+                            r = subprocess.run(cmd, stdin=f_in,
+                                               capture_output=True, text=True, timeout=90)
+                    else:
+                        r = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
                     if r.returncode == 0:
                         copy_ok = True
                         break
@@ -389,12 +529,25 @@ class AdvancedTrayIndicator:
                     continue
 
             if not copy_ok:
+                self._offer_privileges_setup()
                 error_msg = ("Не удалось записать /etc/systemd/system/ciadpi.service "
                              "(нужны права root). Параметры сохранены в конфиг и "
                              "будут применены позже.")
                 print(f"❌ {error_msg}")
                 self.show_notification("Ошибка", error_msg)
                 return False
+
+            # Удаляем override директорию если есть (sudoers покрывает rm -rf этой папки)
+            override_dir = Path('/etc/systemd/system/ciadpi.service.d')
+            if override_dir.exists():
+                try:
+                    subprocess.run(
+                        ['sudo', '-n', 'rm', '-rf', '/etc/systemd/system/ciadpi.service.d'],
+                        capture_output=True, text=True, timeout=30
+                    )
+                    print("🗑️ Удалена override директория")
+                except Exception:
+                    pass
 
             reload_ok, reload_err = self._systemctl('daemon-reload')
             if not reload_ok:
@@ -770,6 +923,11 @@ class AdvancedTrayIndicator:
         byedpi_update_item = Gtk.MenuItem(label="⬆️ Обновить byedpi")
         byedpi_update_item.connect("activate", self.update_byedpi)
         menu.append(byedpi_update_item)
+
+        # Одноразовая настройка беспарольного доступа
+        privileges_item = Gtk.MenuItem(label="🔑 Права доступа (убрать запрос пароля)")
+        privileges_item.connect("activate", self.show_privileges_dialog)
+        menu.append(privileges_item)
         
         # Логи
         logs_item = Gtk.MenuItem(label="📋 Показать логи")

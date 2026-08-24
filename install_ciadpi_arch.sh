@@ -266,6 +266,7 @@ main() {
         "ciadpi_whitelist.py"
         "ciadpi_launcher.sh"
         "diagnose_ciadpi.py"
+        "ciadpi_privileges.sh"
     )
     
     # Локальные файлы если запущено из репозитория, иначе качаем с GitHub
@@ -394,15 +395,28 @@ PYEOF
     # Step 11: Setup permissions + start service
     log_step "Step 11/12: Configuring permissions and starting service"
     
-    local systemctl_bin
-    systemctl_bin=$(command -v systemctl || echo "/usr/bin/systemctl")
+    # Полная настройка беспарольного управления (пароль запрашивается один раз здесь)
+    local priv_script=""
+    if [ -f "ciadpi_privileges.sh" ]; then
+        priv_script="$(pwd)/ciadpi_privileges.sh"
+    elif [ -f "$HOME/.local/bin/ciadpi_privileges.sh" ]; then
+        priv_script="$HOME/.local/bin/ciadpi_privileges.sh"
+    fi
     
-    echo "$USER ALL=(ALL) NOPASSWD: ${systemctl_bin} start ciadpi.service, ${systemctl_bin} stop ciadpi.service, ${systemctl_bin} restart ciadpi.service, ${systemctl_bin} status ciadpi.service, ${systemctl_bin} enable ciadpi.service, ${systemctl_bin} disable ciadpi.service, ${systemctl_bin} daemon-reload" | sudo tee /etc/sudoers.d/ciadpi > /dev/null
-    sudo chmod 440 /etc/sudoers.d/ciadpi
-    sudo visudo -c -f /etc/sudoers.d/ciadpi &>/dev/null && log_info "sudoers OK (${systemctl_bin})" || {
-        sudo rm -f /etc/sudoers.d/ciadpi
-        log_warn "sudoers невалиден, удалён"
-    }
+    if [ -n "$priv_script" ] && sudo -E bash "$priv_script"; then
+        log_info "Passwordless service management configured"
+    else
+        log_warn "ciadpi_privileges.sh недоступен, применяю минимальное sudoers-правило"
+        local systemctl_bin
+        systemctl_bin=$(command -v systemctl || echo "/usr/bin/systemctl")
+        
+        echo "$USER ALL=(ALL) NOPASSWD: ${systemctl_bin} start ciadpi.service, ${systemctl_bin} stop ciadpi.service, ${systemctl_bin} restart ciadpi.service, ${systemctl_bin} status ciadpi.service, ${systemctl_bin} enable ciadpi.service, ${systemctl_bin} disable ciadpi.service, ${systemctl_bin} daemon-reload" | sudo tee /etc/sudoers.d/ciadpi > /dev/null
+        sudo chmod 440 /etc/sudoers.d/ciadpi
+        sudo visudo -c -f /etc/sudoers.d/ciadpi &>/dev/null && log_info "sudoers OK (${systemctl_bin})" || {
+            sudo rm -f /etc/sudoers.d/ciadpi
+            log_warn "sudoers невалиден, удалён"
+        }
+    fi
     
     sudo systemctl enable ciadpi.service || log_warn "Failed to enable service"
     sudo systemctl start ciadpi.service || log_warn "Failed to start service"

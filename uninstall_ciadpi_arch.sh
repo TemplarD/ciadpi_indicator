@@ -106,6 +106,7 @@ log_step "Step 3/8: Removing system files"
 sudo rm -f /etc/systemd/system/ciadpi.service && log_info "✓ System service file removed"
 sudo rm -rf /etc/systemd/system/ciadpi.service.d 2>/dev/null || true
 sudo rm -f /etc/sudoers.d/ciadpi && log_info "✓ sudoers rules removed"
+sudo rm -f /etc/polkit-1/rules.d/49-ciadpi-indicator.rules && log_info "✓ polkit rule removed" || true
 sudo systemctl daemon-reload && log_info "✓ systemd reloaded"
 
 # Step 4: Remove autostart entries

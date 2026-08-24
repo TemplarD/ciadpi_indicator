@@ -195,6 +195,22 @@ For Development: Use whitelist to exclude local domains from proxy routing
 - **Parameter Validation** - Input is validated against real ciadpi options (incl. glued values like `-T3`) before applying
 - **pkexec fallback** - If sudo is unavailable, the indicator asks for the password via the GUI polkit agent
 
+## 🔑 Passwordless service control
+
+The indicator needs root only for `systemctl` actions on `ciadpi.service`.
+To stop password prompts:
+
+- **During installation** — both installers run `ciadpi_privileges.sh` once;
+  you enter the password a single time and never again.
+- **Any time later** — tray menu → **«🔑 Права доступа»** → one password prompt.
+
+What it configures (nothing broader):
+- `/etc/sudoers.d/ciadpi` — NOPASSWD for systemctl actions on `ciadpi.service`
+  only, plus writing the unit file via `tee` and removing its override dir
+- polkit rule allowing the user to manage `ciadpi.service` without a password
+
+Both are validated (`visudo -c`) and removed by the uninstallers.
+
 #### Troubleshooting
 
 **Service not starting?**
