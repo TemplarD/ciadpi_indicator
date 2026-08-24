@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 
-import sys
 import gi
 import re
 import subprocess
@@ -13,13 +12,11 @@ from pathlib import Path
 from datetime import datetime
 from typing import Tuple, List, Dict
 
+sys_path_added = False
+
 gi.require_version('Gtk', '3.0')
 gi.require_version('AppIndicator3', '0.1')
 from gi.repository import Gtk, Gdk, AppIndicator3, GLib
-
-# Пути к модулям: папка скрипта + ~/.local/bin (для установленной копии)
-sys.path.append(str(Path(__file__).resolve().parent))
-sys.path.append(str(Path.home() / '.local' / 'bin'))
 
 try:
     from ciadpi_i18n import t, tr, get_lang, set_lang, save_lang
@@ -29,21 +26,24 @@ except ImportError:
     def t(key): return key
     def tr(key_ru): return key_ru
     def get_lang(): return 'ru'
-    def set_lang(lang): pass
+    def set_lang(l): pass
     def save_lang(): pass
 
 try:
+    sys.path.append(str(Path(__file__).resolve().parent))
     from ciadpi_params_spec import CONTROLS, parse_params, get_value, build_params, HELP_SECTIONS
     PARAMS_SPEC_AVAILABLE = True
 except ImportError:
     PARAMS_SPEC_AVAILABLE = False
     CONTROLS = []
     def parse_params(s): return {}
-    def get_value(d, k): return None
+    def get_value(p, o): return None
     def build_params(w): return ''
     HELP_SECTIONS = {}
 
 try:
+    import sys
+    sys.path.append(str(Path.home() / '.local' / 'bin'))
     from ciadpi_whitelist import WhitelistManager
     WHITELIST_AVAILABLE = True
     print("✅ Модуль белого списка загружен")
@@ -1059,7 +1059,7 @@ class AdvancedTrayIndicator:
         return False  # Останавливаем таймер    
     
 
-    def show_proxy_settings(self, widget=None):
+    def show_proxy_settings(self, widget):
         """Диалог настроек прокси"""
         # Сначала получаем текущие системные настройки
         current_settings = self.get_system_proxy_settings()
@@ -1517,8 +1517,10 @@ class AdvancedTrayIndicator:
     def restore_our_proxy_on_startup(self):
         """Восстанавливаем наши настройки прокси при запуске приложения.
 
-        Ничего не запускает автоматически: только синхронизирует флаг
-        прокси, ЕСЛИ сервис уже работает. Автостарт сервиса отключён."""
+        ⭐ Ничего не запускает и не включает автоматически:
+        только синхронизирует флаг прокси, ЕСЛИ сервис уже работает.
+        Автозапуск сервиса управляется systemd (enable/disable) и
+        настройкой автостарта индикатора в приложении."""
         try:
             # Проверяем статус сервиса
             result = subprocess.run(
@@ -1533,8 +1535,7 @@ class AdvancedTrayIndicator:
                 return False
 
             # Если сервис запущен И у нас есть настройки прокси - восстанавливаем
-            if (service_running and 
-                self.current_params.get("proxy_enabled", False) and 
+            if (self.current_params.get("proxy_enabled", False) and
                 self.current_params.get("proxy_mode") == 'manual'):
                 
                 print("🔄 Восстанавливаем наши настройки прокси при запуске...")

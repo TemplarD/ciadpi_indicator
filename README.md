@@ -12,11 +12,13 @@ Complete DPI bypass solution with system tray indicator. Includes byedpi and man
 
 - 🛡️ **byedpi** - DPI bypass core (using [hufrea/byedpi](https://github.com/hufrea/byedpi))
 - 🖥️ **System Tray** - Easy management
-- ⚡ **One-Click Control** - Start/stop service
-- 🔧 **Parameter Management** - Customize connection with validation
-- 🧪 **Strategy Search** - Brute-force search of optimal bypass parameters (new!)
-- ⬆️ **byedpi Update** - Update the core without reinstalling (new!)
-- 🔌 **Proxy Configuration** - System-wide proxy
+- ⚡ **No auto-start on launch** - the indicator never starts the service by itself; you control it
+- 🔔 **Notification settings** - disable all or per-category notifications (RU/EN)
+- 🌐 **RU/EN localization** - switch language in Application settings
+- 🎛️ **Parameter Builder** - tweak every ciadpi option with sliders/fields, tooltips, and a live parameter string (in addition to the string input)
+- 🧪 **Strategy Search** - Brute-force search of optimal bypass parameters
+- ⬆️ **byedpi Update** - Update the core without reinstalling
+- 🔌 **Proxy modes** - System-wide, PAC, or **Local-only** mode that never touches system proxy settings (point specific apps at the port yourself)
 - 🚀 **Auto-Start** - Starts with system
 
 #### Supported Systems
