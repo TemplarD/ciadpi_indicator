@@ -272,42 +272,82 @@ class AdvancedTrayIndicator:
         except:
             return self.default_params
 
-    def update_service_params(self, new_params):
+    def _systemctl(self, *args):
+        """Запуск systemctl для ciadpi.service с fallback на pkexec (GUI-пароль).
+        Возвращает (ok, stderr)."""
+        # 1) Пробуем напрямую (работает при NOPASSWD sudoers или правах)
+        try:
+            r = subprocess.run(['systemctl', *args],
+                               capture_output=True, text=True, timeout=15)
+            if r.returncode == 0:
+                return True, ""
+        except Exception:
+            pass
+        # 2) sudo без пароля
+        try:
+            r = subprocess.run(['sudo', '-n', 'systemctl', *args],
+                               capture_output=True, text=True, timeout=15)
+            if r.returncode == 0:
+                return True, ""
+        except Exception:
+            pass
+        # 3) pkexec — спросит пароль через GUI-агент
+        try:
+            r = subprocess.run(['pkexec', 'systemctl', *args],
+                               capture_output=True, text=True, timeout=120)
+            return r.returncode == 0, r.stderr.strip()
+        except FileNotFoundError:
+            return False, "pkexec не найден"
+        except subprocess.TimeoutExpired:
+            return False, "Таймаут выполнения команды"
+
+    def update_service_params(self, new_params, apply_proxy=True):
         """Обновление параметров в systemd сервисе - УНИВЕРСАЛЬНАЯ ВЕРСИЯ"""
         try:
             print(f"🔄 Обновление параметров: {new_params}")
-            
+
             # Получаем данные пользователя динамически
             username = os.environ.get('USER')
             home_dir = Path.home()
             byedpi_dir = home_dir / 'byedpi'
             ciadpi_binary = byedpi_dir / 'ciadpi'
-            
+
             # Проверяем что бинарник существует
             if not ciadpi_binary.exists():
                 error_msg = f"Бинарник ciadpi не найден: {ciadpi_binary}"
                 print(f"❌ {error_msg}")
                 self.show_notification("Ошибка", error_msg)
                 return False
-            
+
+            # ⭐ СНАЧАЛА запоминаем параметры в конфиг,
+            # чтобы они не потерялись даже при сбое перезапуска
+            self.current_params["current_params"] = new_params
+            self.current_params["params"] = new_params
+            self.save_config()
+            print("💾 Параметры сохранены в конфиг до перезапуска сервиса")
+
             # Останавливаем сервис
             print("⏹️ Останавливаем сервис...")
-            stop_result = subprocess.run(
-                ['sudo', 'systemctl', 'stop', 'ciadpi.service'], 
-                capture_output=True, text=True, timeout=10
-            )
-            
-            if stop_result.returncode != 0:
-                print(f"⚠️ Предупреждение при остановке: {stop_result.stderr}")
-            
-            time.sleep(2)
-            
+            ok, err = self._systemctl('stop', 'ciadpi.service')
+
+            if not ok:
+                print(f"⚠️ Предупреждение при остановке: {err}")
+
+            time.sleep(1)
+
             # Удаляем override директорию если есть (избегаем конфликтов)
             override_dir = Path('/etc/systemd/system/ciadpi.service.d')
             if override_dir.exists():
-                subprocess.run(['sudo', 'rm', '-rf', str(override_dir)], check=False)
-                print("🗑️ Удалена override директория")
-            
+                # rm требует root; пробуем через pkexec
+                try:
+                    subprocess.run(
+                        ['pkexec', 'rm', '-rf', str(override_dir)],
+                        capture_output=True, text=True, timeout=60
+                    )
+                    print("🗑️ Удалена override директория")
+                except Exception:
+                    pass
+
             # Создаем service файл с динамическими путями
             service_content = f"""[Unit]
     Description=CIADPI DPI Bypass Service
@@ -326,49 +366,74 @@ class AdvancedTrayIndicator:
     [Install]
     WantedBy=multi-user.target
     """
-            
+
             # Записываем временный файл
             temp_file = Path('/tmp/ciadpi_temp.service')
             with open(temp_file, 'w', encoding='utf-8') as f:
                 f.write(service_content)
-            
-            # Копируем с правами root
+
+            # Копируем с правами root: сначала прямой путь, потом pkexec
             print("📝 Обновляем service файл...")
-            copy_result = subprocess.run(
-                ['sudo', 'cp', str(temp_file), '/etc/systemd/system/ciadpi.service'],
-                capture_output=True, text=True, check=True
-            )
-            
-            subprocess.run(['sudo', 'systemctl', 'daemon-reload'], check=True)
-            
-            # Обновляем конфиг
-            self.current_params["current_params"] = new_params
-            self.current_params["params"] = new_params
-            self.save_config()
-            
+            copy_ok = False
+            for cmd in (
+                ['sudo', '-n', 'cp', str(temp_file), '/etc/systemd/system/ciadpi.service'],
+                ['cp', str(temp_file), '/etc/systemd/system/ciadpi.service'],
+                ['pkexec', 'cp', str(temp_file), '/etc/systemd/system/ciadpi.service'],
+            ):
+                try:
+                    r = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+                    if r.returncode == 0:
+                        copy_ok = True
+                        break
+                except (FileNotFoundError, subprocess.TimeoutExpired):
+                    continue
+
+            if not copy_ok:
+                error_msg = ("Не удалось записать /etc/systemd/system/ciadpi.service "
+                             "(нужны права root). Параметры сохранены в конфиг и "
+                             "будут применены позже.")
+                print(f"❌ {error_msg}")
+                self.show_notification("Ошибка", error_msg)
+                return False
+
+            reload_ok, reload_err = self._systemctl('daemon-reload')
+            if not reload_ok:
+                print(f"⚠️ daemon-reload не выполнен: {reload_err}")
+
             # Запускаем сервис
             print("▶️ Запускаем сервис...")
-            start_result = subprocess.run(
-                ['sudo', 'systemctl', 'start', 'ciadpi.service'],
-                capture_output=True, text=True, check=True
-            )
-            
+            start_ok, start_err = self._systemctl('start', 'ciadpi.service')
+
+            if not start_ok:
+                error_msg = f"Не удалось запустить сервис: {start_err}"
+                print(f"❌ {error_msg}")
+                self.show_notification("Ошибка", error_msg)
+                return False
+
             # Проверяем статус
             time.sleep(3)
             status_result = subprocess.run(
                 ['systemctl', 'is-active', 'ciadpi.service'],
                 capture_output=True, text=True
             )
-            
+
             if status_result.stdout.strip() == 'active':
                 print("✅ Параметры успешно обновлены")
+                # Применяем наши настройки прокси к новому сервису
+                if apply_proxy and self.current_params.get("proxy_enabled"):
+                    host = self.current_params.get("proxy_host", "")
+                    port = self.current_params.get("proxy_port", "1080")
+                    try:
+                        self.apply_system_proxy('manual', host, port)
+                    except Exception as e:
+                        print(f"⚠️ Прокси не применён после обновления: {e}")
                 self.show_notification("Успех", "Параметры обновлены и сервис запущен")
                 return True
             else:
                 # Если сервис не запустился, показываем ошибку
                 error_msg = "Сервис не запустился после обновления параметров"
                 print(f"❌ {error_msg}")
-                
+
                 # Получаем последние логи для диагностики
                 log_result = subprocess.run(
                     ['journalctl', '-u', 'ciadpi.service', '-n', '10', '--no-pager'],
@@ -376,16 +441,16 @@ class AdvancedTrayIndicator:
                 )
                 print("Последние логи сервиса:")
                 print(log_result.stdout)
-                
+
                 self.show_notification("Ошибка", f"{error_msg}\nПроверьте логи")
                 return False
-            
+
         except subprocess.CalledProcessError as e:
             error_msg = f"Ошибка выполнения команды: {e}\nStderr: {e.stderr}"
             print(f"❌ {error_msg}")
             self.show_notification("Ошибка", "Не удалось выполнить системную команду")
             return False
-            
+
         except Exception as e:
             error_msg = f"Общая ошибка: {e}"
             print(f"❌ {error_msg}")
@@ -689,12 +754,22 @@ class AdvancedTrayIndicator:
             autosearch_item = Gtk.MenuItem(label="🔍 Автопоиск параметров")
             autosearch_item.connect("activate", self.show_autosearch_dialog)
             menu.append(autosearch_item)
-            
+
             history_item = Gtk.MenuItem(label="📊 История тестирования")
             history_item.connect("activate", self.show_history)
             menu.append(history_item)
-            
+
             menu.append(Gtk.SeparatorMenuItem())
+
+        # Поиск стратегии (перебор параметров)
+        strategy_item = Gtk.MenuItem(label="🧪 Поиск стратегии (перебор параметров)")
+        strategy_item.connect("activate", self.show_strategy_search)
+        menu.append(strategy_item)
+
+        # Обновление byedpi без переустановки
+        byedpi_update_item = Gtk.MenuItem(label="⬆️ Обновить byedpi")
+        byedpi_update_item.connect("activate", self.update_byedpi)
+        menu.append(byedpi_update_item)
         
         # Логи
         logs_item = Gtk.MenuItem(label="📋 Показать логи")
@@ -1379,66 +1454,90 @@ class AdvancedTrayIndicator:
         """Проверка параметров ciadpi с детальными сообщениями об ошибках"""
         if not params.strip():
             return True, ""
-        
-        # Все допустимые параметры из документации
-        valid_params = {
-            # Основные
-            '-i', '-p', '-D', '-w', '-E', '-c', '-I', '-b', '-g', '-N', '-U', '-F',
-            # Автоматический режим  
-            '-A', '-L', '-u', '-y', '-T',
-            # Протоколы
-            '-K',
-            # Ограничители
-            '-H', '-j', '-V', '-R',
-            # Методы обхода
-            '-s', '-d', '-o', '-q', '-f', '-r',
-            # Модификации
-            '-t', '-S', '-O', '-l', '-e', '-n', '-Q', '-M', '-a', '-Y'
-        }
-        
-        # Методы обхода (-o1 до -o25)
-        obfuscation_methods = {f'-o{i}' for i in range(1, 26)}
-        valid_params.update(obfuscation_methods)
-        
-        parts = params.split()
-        unknown_params = []
-        
+
+        # Флаги без значения
+        bool_flags = {'-D', '-E', '-N', '-U', '-F', '-S', '-Y'}
+
+        # Флаги, принимающие значение (отдельным токеном или прикреплённо: -T3)
+        val_flags = {'-i', '-p', '-w', '-c', '-I', '-b', '-g', '-T', '-A', '-L',
+                     '-u', '-y', '-K', '-H', '-j', '-V', '-R', '-s', '-d', '-o',
+                     '-q', '-f', '-r', '-t', '-O', '-l', '-e', '-n', '-Q', '-M',
+                     '-a', '-x'}
+
+        known_short = bool_flags | val_flags
+
+        # Методы обхода с суффиксами: -o1, -o25+s, -o10+m и т.п.
+        obfuscation_re = re.compile(r'^-o\d+([+][a-z]+)*$')
+        # Прикреплённые значения-суффиксы: 1+s, 2+m ...
+        suffix_value_re = re.compile(r'^\d+([+][a-z]+)?$')
+
+        # Длинные опции из справки ciadpi -h
+        known_long = {'--ip', '--port', '--daemon', '--pidfile', '--transparent',
+                      '--max-conn', '--no-domain', '--no-udp', '--conn-ip',
+                      '--buf-size', '--debug', '--def-ttl', '--tfo', '--timeout',
+                      '--auto', '--auto-mode', '--cache-ttl', '--cache-file',
+                      '--proto', '--hosts', '--ipset', '--pf', '--round',
+                      '--split', '--disorder', '--oob', '--disoob', '--fake',
+                      '--ttl', '--md', '--fake-offset', '--fake-data',
+                      '--oob-data', '--fake-sni', '--fake-tls-mod', '--mod-http',
+                      '--tlsrec', '--tlsminor', '--udp-fake', '--drop-sack'}
+
+        tokens = params.split()
+        unknown = []
         i = 0
-        while i < len(parts):
-            part = parts[i]
-            
-            # Проверяем основные параметры
-            if part in valid_params:
+        while i < len(tokens):
+            tok = tokens[i]
+
+            # специальные формы ciadpi
+            if tok == 'o--tlsrec' or tok.startswith('o--'):
                 i += 1
                 continue
-                
-            # Проверяем методы обхода с суффиксами (-o1+s, -o25+m и т.д.)
-            if re.match(r'^-o\d+[\+sme]*$', part):
+            if suffix_value_re.match(tok):
                 i += 1
                 continue
-                
-            # Проверяем специальные форматы (1+s, 2+s, o--tlsrec)
-            if part in ['1+s', '2+s', '3+s', '-At', 'o--tlsrec']:
+
+            if tok in known_short:
+                # флаг со значением отдельным токеном?
+                if tok in val_flags and i + 1 < len(tokens) \
+                        and not tokens[i + 1].startswith('-'):
+                    i += 2  # пропускаем флаг и его значение
+                else:
+                    i += 1
+                continue
+
+            if tok in known_long:
+                # длинная опция со значением?
+                if i + 1 < len(tokens) and not tokens[i + 1].startswith('-'):
+                    # --tlsrec и --split могут быть без значения в спецформах,
+                    # но обычно со значением; пропускаем значение
+                    i += 2
+                else:
+                    i += 1
+                continue
+
+            if tok.startswith('--'):
+                # неизвестная длинная опция — ошибка
+                unknown.append(tok)
                 i += 1
                 continue
-                
-            # Параметры со значениями (пропускаем следующую часть)
-            if part in ['-i', '-p', '-w', '-c', '-I', '-b', '-g', '-u', '-T', 
-                    '-A', '-L', '-K', '-H', '-j', '-V', '-R', '-s', '-d', 
-                    '-o', '-q', '-f', '-r', '-t', '-O', '-l', '-e', '-n', '-a']:
-                if i + 1 < len(parts):
-                    i += 2  # Пропускаем параметр и его значение
+
+            if tok.startswith('-'):
+                # прикреплённое значение: -T3, -L1, -R2 ...
+                if tok[:2] in known_short or obfuscation_re.match(tok):
+                    i += 1
                     continue
-            
-            # Если дошли сюда - параметр неизвестен
-            unknown_params.append(part)
+                unknown.append(tok)
+                i += 1
+                continue
+
+            # голое значение (torst, ssl_err, имя хоста...) — продолжение значения
             i += 1
-        
-        if unknown_params:
-            error_msg = f"Неизвестные параметры: {', '.join(unknown_params)}\n"
+
+        if unknown:
+            error_msg = f"Неизвестные параметры: {', '.join(unknown)}\n"
             error_msg += "Используйте только параметры из документации ciadpi"
             return False, error_msg
-        
+
         return True, ""
 
     def show_settings(self, widget=None):
@@ -1535,29 +1634,41 @@ class AdvancedTrayIndicator:
             main_box.pack_start(hint_label, False, False, 0)
             
             content_area.pack_start(main_box, True, True, 0)
-            content_area.show_all()             
-###
-            response = dialog.run()
-            print(f"DEBUG: Dialog response: {response}")
-            
-            if response == Gtk.ResponseType.OK:
-                print("DEBUG: OK clicked")
-                new_params = entry.get_text().strip()
-                print(f"DEBUG: New params: {new_params}")
-                if new_params and new_params != current_params:
-                    print("DEBUG: Calling update_service_params")
-                    threading.Thread(
-                        self.show_notification("Перезапуск...", "Перезапуск сервиса, подождите"),
-                        target=self.update_service_params, 
-                        args=(new_params,),
-                        daemon=True
-                    ).start()    
+            content_area.show_all()
 
-            else:
-                print("DEBUG: Cancel or close clicked")
-            dialog.destroy()                 
-              
-                
+            # Цикл: при ошибке валидации диалог остаётся открытым
+            while True:
+                response = dialog.run()
+
+                if response != Gtk.ResponseType.OK:
+                    break  # Cancel/закрытие — выходим
+
+                new_params = entry.get_text().strip()
+                if not new_params or new_params == current_params:
+                    break  # Нечего менять — просто закрываем
+
+                # ⭐ Валидация параметров ДО применения
+                valid, err_msg = self.validate_params(new_params)
+                if not valid:
+                    err_dialog = Gtk.MessageDialog(
+                        transient_for=dialog, flags=0,
+                        message_type=Gtk.MessageType.ERROR,
+                        buttons=Gtk.ButtonsType.OK,
+                        text=f"Ошибка в параметрах:\n{err_msg}"
+                    )
+                    err_dialog.run()
+                    err_dialog.destroy()
+                    continue  # Диалог остаётся открытым — даём исправить
+
+                self.show_notification("Перезапуск...", "Перезапуск сервиса, подождите")
+                threading.Thread(
+                    target=self.update_service_params,
+                    args=(new_params,),
+                    daemon=True
+                ).start()
+                break
+
+            dialog.destroy()
         except Exception as e:
             print(f"ERROR in show_settings: {e}")
             import traceback
@@ -1667,9 +1778,360 @@ class AdvancedTrayIndicator:
         scroll.add(text_view)
         content_area.pack_start(scroll, True, True, 0)
         content_area.show_all()
-        
+
         dialog.run()
         dialog.destroy()
+
+    # ================= ПОИСК СТРАТЕГИИ =================
+
+    def show_strategy_search(self, widget=None):
+        """Диалог поиска оптимальной стратегии перебором параметров."""
+        try:
+            from ciadpi_strategy_search import StrategySearcher
+        except ImportError as e:
+            self.show_notification("Ошибка", f"Модуль поиска стратегии недоступен: {e}")
+            return
+
+        # Не даём запустить второй поиск
+        if getattr(self, 'strategy_window', None) and self.strategy_window.get_visible():
+            self.strategy_window.present()
+            return
+
+        searcher = StrategySearcher()
+
+        dialog = Gtk.Dialog(title="Поиск стратегии — перебор параметров", flags=0)
+        dialog.add_buttons(Gtk.STOCK_CLOSE, Gtk.ResponseType.CLOSE)
+        dialog.set_default_size(760, 560)
+        self.strategy_window = dialog
+
+        content_area = dialog.get_content_area()
+        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        main_box.set_margin_top(10)
+        main_box.set_margin_bottom(10)
+        main_box.set_margin_start(10)
+        main_box.set_margin_end(10)
+
+        # --- Настройки проверки ---
+        settings_frame = Gtk.Frame(label="Настройка проверки")
+        settings_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        settings_box.set_margin_top(8)
+        settings_box.set_margin_bottom(8)
+        settings_box.set_margin_start(8)
+        settings_box.set_margin_end(8)
+
+        row1 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        lbl_tests = Gtk.Label(label="Макс. комбинаций:")
+        lbl_tests.set_xalign(0)
+        spin_tests = Gtk.SpinButton.new_with_range(1, 200, 1)
+        spin_tests.set_value(20)
+
+        lbl_port = Gtk.Label(label="Тестовый порт:")
+        spin_port = Gtk.SpinButton.new_with_range(1024, 65535, 1)
+        spin_port.set_value(searcher.test_port)
+        row1.pack_start(lbl_tests, False, False, 0)
+        row1.pack_start(spin_tests, False, False, 0)
+        row1.pack_start(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL), False, False, 4)
+        row1.pack_start(lbl_port, False, False, 0)
+        row1.pack_start(spin_port, False, False, 0)
+
+        row2 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        lbl_urls = Gtk.Label(label="URL для проверки:")
+        lbl_urls.set_xalign(0)
+        urls_entry = Gtk.Entry()
+        urls_entry.set_text(" ".join(searcher.default_test_urls))
+        urls_entry.set_tooltip_text("URL-адреса через пробел; доступ проверяется через тестовый прокси")
+        urls_entry.set_hexpand(True)
+        row2.pack_start(lbl_urls, False, False, 0)
+        row2.pack_start(urls_entry, True, True, 0)
+
+        settings_box.pack_start(row1, False, False, 0)
+        settings_box.pack_start(row2, False, False, 0)
+        settings_frame.add(settings_box)
+
+        # --- Прогресс ---
+        progress_label = Gtk.Label(label="Готов к поиску")
+        progress_label.set_xalign(0)
+        progressbar = Gtk.ProgressBar()
+        progressbar.set_show_text(True)
+        progressbar.set_fraction(0.0)
+
+        # --- Кнопки управления ---
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        btn_start = Gtk.Button(label="▶️ Запустить поиск")
+        btn_stop = Gtk.Button(label="⏹ Остановить")
+        btn_stop.set_sensitive(False)
+        btn_apply = Gtk.Button(label="✅ Применить лучшие параметры")
+        btn_apply.set_sensitive(False)
+        btn_box.pack_start(btn_start, False, False, 0)
+        btn_box.pack_start(btn_stop, False, False, 0)
+        btn_box.pack_end(btn_apply, False, False, 0)
+
+        # --- Журнал хода поиска ---
+        log_frame = Gtk.Frame(label="Ход поиска (куда подключаемся и что тестируем)")
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_vexpand(True)
+        text_view = Gtk.TextView()
+        text_view.set_editable(False)
+        text_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        text_view.set_monospace(True)
+        log_buffer = text_view.get_buffer()
+        log_frame.add(scroll)
+        scroll.add(text_view)
+
+        main_box.pack_start(settings_frame, False, False, 0)
+        main_box.pack_start(progress_label, False, False, 0)
+        main_box.pack_start(progressbar, False, False, 0)
+        main_box.pack_start(btn_box, False, False, 0)
+        main_box.pack_start(log_frame, True, True, 0)
+
+        content_area.pack_start(main_box, True, True, 0)
+        content_area.show_all()
+
+        state = {'running': False, 'best_params': None}
+
+        def ui_log(message):
+            log_buffer.insert(log_buffer.get_end_iter(), message + "\n")
+            # автоскролл вниз
+            mark = log_buffer.create_mark(None, log_buffer.get_end_iter(), False)
+            text_view.scroll_to_mark(mark, 0.0, True, 0.0, 1.0)
+
+        def ui_set_progress(fraction, text):
+            progressbar.set_fraction(min(1.0, fraction))
+            progressbar.set_text(text)
+
+        def on_progress(stage, data):
+            """Колбэк из фонового потока — планируем обновление GUI."""
+            if stage == 'start':
+                GLib.idle_add(ui_log, f"▶️ Старт: {data['total']} комбинаций, "
+                                      f"тестовый порт {data['port']}, "
+                                      f"подключение через 127.0.0.1:{data['port']}")
+            elif stage == 'test':
+                r = data['result']
+                idx = data['index'] + 1
+
+                def update_test(r=r, idx=idx):
+                    total_now = max(idx, 1)
+                    frac = idx / float(state.get('planned_total', total_now) or total_now)
+                    if r['success']:
+                        ui_set_progress(frac, f"Тест {idx}: УСПЕХ ({r['urls_ok']}/{r['urls_total']} URL)")
+                        ui_log(f"[{idx}] ✅ {r['urls_ok']}/{r['urls_total']} URL, "
+                               f"средняя скорость {r['speed']:.2f}с | {r['params']}")
+                        for url, ok, code, t in r.get('details', []):
+                            mark = "✅" if ok else "❌"
+                            ui_log(f"      {mark} {url} → HTTP {code} ({t}с)")
+                    else:
+                        ui_set_progress(frac, f"Тест {idx}: неудача")
+                        err = (r.get('error') or '')[:120]
+                        ui_log(f"[{idx}] ❌ {err} | {r['params']}")
+                    return False
+                GLib.idle_add(update_test)
+
+            elif stage == 'done':
+                best = data.get('best')
+
+                def update_done(best=best):
+                    if best:
+                        state['best_params'] = best
+                        btn_apply.set_sensitive(True)
+                        ui_log(f"\n🏆 Лучшие параметры: {best}")
+                        res = data.get('result') or {}
+                        if res:
+                            ui_log(f"    Скорость: {res['speed']:.2f}с, "
+                                   f"доступно URL: {res['urls_ok']}/{res['urls_total']}")
+                    else:
+                        ui_log("\n😕 Рабочие параметры не найдены. "
+                               "Попробуйте другие URL или увеличьте число комбинаций.")
+                    ui_set_progress(1.0, "Поиск завершён")
+                    btn_start.set_sensitive(True)
+                    btn_stop.set_sensitive(False)
+                    state['running'] = False
+                    return False
+                GLib.idle_add(update_done)
+
+        def on_start(btn):
+            if state['running']:
+                return
+            urls = [u.strip() for u in urls_entry.get_text().split() if u.strip()]
+            if not urls:
+                ui_log("⚠️ Укажите хотя бы один URL для проверки")
+                return
+            searcher.test_port = int(spin_port.get_value())
+            max_tests = int(spin_tests.get_value())
+            state.update({'running': True, 'best_params': None, 'planned_total': max_tests})
+            btn_start.set_sensitive(False)
+            btn_stop.set_sensitive(True)
+            btn_apply.set_sensitive(False)
+            log_buffer.set_text("")
+            ui_set_progress(0.0, "Запуск...")
+            threading.Thread(
+                target=searcher.find_optimal_params,
+                args=(max_tests, urls, on_progress),
+                daemon=True
+            ).start()
+
+        def on_stop(btn):
+            searcher.stop_search()
+            ui_log("⏹ Остановка запрошена...")
+
+        def on_apply(btn):
+            params = state.get('best_params')
+            if not params:
+                return
+            dialog.set_sensitive(False)
+            self.show_notification("Применение...", "Обновление параметров сервиса")
+
+            def apply_thread():
+                success = self.update_service_params(params)
+                def finish():
+                    dialog.set_sensitive(True)
+                    if success:
+                        ui_log(f"✅ Параметры применены: {params}")
+                        self.show_notification("Успех", "Лучшие параметры применены к сервису")
+                    else:
+                        ui_log(f"❌ Не удалось применить параметры: {params}")
+                    return False
+                GLib.idle_add(finish)
+
+            threading.Thread(target=apply_thread, daemon=True).start()
+
+        btn_start.connect("clicked", on_start)
+        btn_stop.connect("clicked", on_stop)
+        btn_apply.connect("clicked", on_apply)
+        dialog.connect("response",
+                       lambda d, r: searcher.stop_search() if state['running'] else None)
+
+        dialog.show_all()
+
+    # ================= /ПОИСК СТРАТЕГИИ =================
+
+    # ================= ОБНОВЛЕНИЕ BYEDPI =================
+
+    def update_byedpi(self, widget=None):
+        """Обновление byedpi из git-репозитория БЕЗ переустановки программы.
+
+        Логика:
+          1. Проверяем что ~/byedpi — git-репозиторий hufrea/byedpi
+          2. git pull (права root не нужны)
+          3. make clean && make (локальная сборка, root не нужен)
+          4. Резервная копия старого бинарника + перезапуск сервиса
+        """
+        def update_thread():
+            byedpi_dir = Path.home() / 'byedpi'
+            binary = byedpi_dir / 'ciadpi'
+            backup = byedpi_dir / 'ciadpi.bak'
+
+            if not byedpi_dir.exists():
+                GLib.idle_add(self.show_notification,
+                              "Ошибка", f"Каталог {byedpi_dir} не найден")
+                return
+
+            def log(msg):
+                print(f"[byedpi-update] {msg}")
+
+            # 1) Проверка репозитория
+            remotes = subprocess.run(
+                ['git', '-C', str(byedpi_dir), 'remote', 'get-url', 'origin'],
+                capture_output=True, text=True, timeout=10
+            )
+            if remotes.returncode != 0:
+                GLib.idle_add(self.show_notification, "Ошибка",
+                              "~/byedpi не является git-репозиторием.\n"
+                              "Обновление невозможно без переустановки.")
+                return
+            log(f"remote: {remotes.stdout.strip()}")
+
+            # 2) Текущая версия
+            old_hash = subprocess.run(
+                ['git', '-C', str(byedpi_dir), 'rev-parse', '--short', 'HEAD'],
+                capture_output=True, text=True, timeout=10
+            ).stdout.strip()
+            log(f"текущая версия: {old_hash}")
+
+            # 3) Резервная копия текущего бинарника (для отката)
+            try:
+                if binary.exists():
+                    import shutil as _shutil
+                    _shutil.copy2(binary, backup)
+                    log(f"бэкап бинарника: {backup}")
+            except Exception as e:
+                log(f"⚠️ не удалось сделать бэкап: {e}")
+
+            # 4) Останавливаем сервис перед заменой бинарника
+            log("останавливаем сервис...")
+            self._systemctl('stop', 'ciadpi.service')
+
+            try:
+                # 5) git pull
+                log("git pull...")
+                pull = subprocess.run(
+                    ['git', '-C', str(byedpi_dir), 'pull', '--ff-only'],
+                    capture_output=True, text=True, timeout=120
+                )
+                log(pull.stdout.strip() or pull.stderr.strip())
+                if pull.returncode != 0:
+                    raise RuntimeError(f"git pull failed: {pull.stderr.strip()[:200]}")
+
+                new_hash = subprocess.run(
+                    ['git', '-C', str(byedpi_dir), 'rev-parse', '--short', 'HEAD'],
+                    capture_output=True, text=True, timeout=10
+                ).stdout.strip()
+
+                if new_hash == old_hash and binary.exists():
+                    log("уже последняя версия")
+                    GLib.idle_add(self.show_notification, "byedpi",
+                                  f"Уже последняя версия ({old_hash})")
+                    # всё равно пересобирать не будем — просто запускаем обратно
+                    self._systemctl('start', 'ciadpi.service')
+                    return
+
+                # 6) Сборка
+                log("make clean...")
+                subprocess.run(['make', '-C', str(byedpi_dir), 'clean'],
+                               capture_output=True, text=True, timeout=60)
+                log("компиляция make...")
+                build = subprocess.run(
+                    ['make', '-C', str(byedpi_dir)],
+                    capture_output=True, text=True, timeout=300
+                )
+                if build.returncode != 0 or not binary.exists():
+                    err = (build.stderr or build.stdout or '')[-400:]
+                    raise RuntimeError(f"Сборка не удалась: {err}")
+
+                log("сборка успешна ✅")
+
+                # 7) Перезапуск сервиса с прежними параметрами
+                log("запускаем сервис...")
+                started = self._systemctl('start', 'ciadpi.service')
+                time.sleep(3)
+                active = subprocess.run(
+                    ['systemctl', 'is-active', 'ciadpi.service'],
+                    capture_output=True, text=True
+                ).stdout.strip() == 'active'
+
+                if active:
+                    msg = f"byedpi обновлён: {old_hash} → {new_hash}. Сервис работает."
+                    log(msg)
+                    GLib.idle_add(self.show_notification, "Обновление завершено", msg)
+                else:
+                    # Откат на резервную копию если сервис не поднялся
+                    log("сервис не запустился — пробуем откатить бинарник")
+                    if backup.exists():
+                        import shutil as _shutil
+                        _shutil.copy(backup, binary)
+                    self._systemctl('start', 'ciadpi.service')
+                    GLib.idle_add(self.show_notification, "byedpi",
+                                  f"Обновлён до {new_hash}, но сервис не стартовал — "
+                                  "выполнен откат, проверьте логи")
+
+            except Exception as e:
+                log(f"ОШИБКА: {e}")
+                # Пытаемся вернуть сервис в рабочее состояние
+                self._systemctl('start', 'ciadpi.service')
+                GLib.idle_add(self.show_notification, "Ошибка обновления", str(e)[:200])
+
+        threading.Thread(target=update_thread, daemon=True).start()
+
+    # ================= /ОБНОВЛЕНИЕ BYEDPI =================
 
     def show_logs(self, widget):
         try:

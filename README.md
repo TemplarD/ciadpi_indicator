@@ -2,6 +2,8 @@
 
 ![GitHub](https://img.shields.io/badge/platform-linux-blue)
 ![GitHub](https://img.shields.io/badge/ubuntu-20.04%2B-orange)
+![GitHub](https://img.shields.io/badge/debian-11%20%7C%2012%20%7C%2013-green)
+![GitHub](https://img.shields.io/badge/arch%20linux-supported-1793D1)
 ![License](https://img.shields.io/badge/License-MIT-blue.svg) 
 
 Complete DPI bypass solution with system tray indicator. Includes byedpi and management interface.
@@ -11,11 +13,23 @@ Complete DPI bypass solution with system tray indicator. Includes byedpi and man
 - 🛡️ **byedpi** - DPI bypass core (using [hufrea/byedpi](https://github.com/hufrea/byedpi))
 - 🖥️ **System Tray** - Easy management
 - ⚡ **One-Click Control** - Start/stop service
-- 🔧 **Parameter Management** - Customize connection
+- 🔧 **Parameter Management** - Customize connection with validation
+- 🧪 **Strategy Search** - Brute-force search of optimal bypass parameters (new!)
+- ⬆️ **byedpi Update** - Update the core without reinstalling (new!)
 - 🔌 **Proxy Configuration** - System-wide proxy
 - 🚀 **Auto-Start** - Starts with system
 
-#### Quick Install
+#### Supported Systems
+
+- Ubuntu 20.04+
+- Debian 11 / 12 / **13 (trixie)** — uses ayatana appindicator on new releases
+- Linux Mint 20+
+- **Arch Linux / Manjaro** — dedicated installer
+- Other systemd-based distributions
+
+## 📦 Installation
+
+### Ubuntu / Debian / Mint
 
 ```bash
 wget -O install_ciadpi.sh https://raw.githubusercontent.com/templard/ciadpi_indicator/master/install_ciadpi_complete.sh
@@ -23,13 +37,35 @@ chmod +x install_ciadpi.sh
 ./install_ciadpi.sh
 ```
 
-#### Quick Uninstall
+### Arch Linux / Manjaro
+
+```bash
+git clone https://github.com/templard/ciadpi_indicator.git
+cd ciadpi_indicator
+./install_ciadpi_arch.sh
+```
+
+The Arch installer builds byedpi into `~/byedpi/ciadpi` and creates a **system**
+`ciadpi.service` — exactly what the tray indicator expects, so all tray functions work out of the box.
+
+## 🗑️ Uninstallation
+
+### Ubuntu / Debian / Mint
 
 ```bash
 wget -O uninstall_ciadpi.sh https://raw.githubusercontent.com/templard/ciadpi_indicator/master/uninstall_ciadpi_complete.sh
 chmod +x uninstall_ciadpi.sh
 ./uninstall_ciadpi.sh
 ```
+
+### Arch Linux / Manjaro
+
+```bash
+cd ciadpi_indicator   # если есть локальная копия
+./uninstall_ciadpi_arch.sh
+```
+
+Both uninstallers ask before removing `~/byedpi` and configs; a config backup is kept outside the removed directory.
 
 #### About byedpi
 
@@ -47,6 +83,7 @@ byedpi features:
 - **System tray indicator** in ~/.local/bin/
 - **Systemd service** for automatic management
 - **Desktop integration** with autostart
+- **sudoers rules** for passwordless service control (validated via visudo)
 
 #### Usage
 
@@ -62,6 +99,36 @@ systemctl start ciadpi.service
 systemctl stop ciadpi.service  
 systemctl status ciadpi.service
 ```
+
+## 🧪 Strategy Search (перебор параметров)
+
+New in v1.3: menu item **«Поиск стратегии»** in the tray menu runs a brute-force
+search over parameter combinations:
+
+1. Each candidate starts as a **separate ciadpi instance on a test port** (default 1081) — your working service is not touched.
+2. Availability of chosen URLs is checked through the test proxy with curl.
+3. Progress bar + live log show every tested combination and per-URL results.
+4. The best (fastest successful) set can be applied to the service with one button.
+
+CLI mode is also available:
+
+```bash
+python3 ~/.local/bin/ciadpi_strategy_search.py --max-tests 20 --port 1081 --url https://example.com
+```
+
+Results history: `~/.config/ciadpi/strategy_history.json`
+
+## ⬆️ Updating byedpi without reinstalling
+
+Tray menu → **«Обновить byedpi»**:
+
+1. Checks that `~/byedpi` is a git checkout of hufrea/byedpi
+2. Backs up the current binary to `~/byedpi/ciadpi.bak`
+3. `git pull --ff-only` + `make clean && make`
+4. Restarts the service with your existing parameters
+5. If the new build fails to start — automatic rollback to the backup
+
+No root reinstall needed: everything happens inside your home directory.
 
 #### Enhanced Proxy Management
 
@@ -96,14 +163,17 @@ export https_proxy=http://127.0.0.1:1080
 All proxy settings are stored in `~/.config/ciadpi/config.json`:
 ```json
 {
+  "params": "-o1 -o25+s -T3 -At o--tlsrec 1+s",
   "proxy_enabled": true,
   "proxy_mode": "manual",
-  "proxy_host": "127.0.0.1",
+  "proxy_host": "",
   "proxy_port": "1080",
   "auto_disable_proxy": true,
-  "we_changed_proxy": true
+  "we_changed_proxy": false
 }
 ```
+
+Parameters are saved to config **before** the service restart, so they are never lost even if the restart fails.
 
 ## 🛡️ Whitelist Support:
 
@@ -122,13 +192,8 @@ For Development: Use whitelist to exclude local domains from proxy routing
 - **Smart State Tracking** - Remembers if proxy settings were changed by the application
 - **Auto-Restore Option** - Optional automatic restoration of original system proxy when service stops
 - **Settings Persistence** - All proxy configurations survive application restarts
-
-#### Supported Systems
-
-- Ubuntu 20.04+
-- Debian 11+ 
-- Linux Mint 20+
-- Other systemd-based distributions
+- **Parameter Validation** - Input is validated against real ciadpi options (incl. glued values like `-T3`) before applying
+- **pkexec fallback** - If sudo is unavailable, the indicator asks for the password via the GUI polkit agent
 
 #### Troubleshooting
 
@@ -141,32 +206,32 @@ journalctl -u ciadpi.service -f
 **Indicator not appearing?**
 - Log out and log back in
 - Or restart your system  
-- Check if AppIndicator is supported on your desktop
+- Check if AppIndicator is supported on your desktop (on Debian 13+ the ayatana package is used automatically)
+- The indicator falls back to Gtk.StatusIcon when AppIndicator is missing
 
 **Proxy not working?**
 - Verify CIADPI service is running: systemctl status ciadpi.service
 - Check proxy settings in browser/system
 - Try using empty host field in proxy settings
+- Run diagnostics: `~/.local/bin/ciadpi-diagnose`
 
-#### License
-
-MIT License
-
-#### Repository Structure
+### Repository Structure
 
 ```
-ciadpi-complete/
+ciadpi_indicator/
 ├── README.md
 ├── LICENSE
-├── diagnose_ciadpi.py
-├── ciadpi_whitelist.py
-├── install_ciadpi_complete.sh
-├── uninstall_ciadpi_complete.sh
-├── ciadpi.service
-├── ciadpi_advanced_tray.py
+├── ciadpi_advanced_tray.py      # tray indicator (GTK3/AppIndicator)
+├── ciadpi_strategy_search.py    # brute-force strategy search (new)
 ├── ciadpi_autosearch.py
 ├── ciadpi_param_generator.py
-├── ciadpi_launcher.sh
+├── ciadpi_whitelist.py
+├── diagnose_ciadpi.py
+├── install_ciadpi_complete.sh   # installer for Debian-based
+├── uninstall_ciadpi_complete.sh # uninstaller for Debian-based
+├── install_ciadpi_arch.sh       # installer for Arch Linux
+├── uninstall_ciadpi_arch.sh     # uninstaller for Arch Linux
+├── ciadpi.service               # systemd unit template
 └── assets/
     └── (screenshots, etc.)
 ```
@@ -175,3 +240,7 @@ ciadpi-complete/
 
 - **byedpi** - Core DPI bypass engine: [hufrea/byedpi](https://github.com/hufrea/byedpi)
 - **CIADPI Indicator** - System tray management interface
+
+#### License
+
+MIT License
