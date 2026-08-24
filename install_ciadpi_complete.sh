@@ -47,6 +47,30 @@ install_build_dependencies() {
     log "Build dependencies installed"
 }
 
+# Detect Debian version and AppIndicator package availability
+# Debian 13 (trixie) удалил gir1.2-appindicator3-0.1 — нужен ayatana-вариант
+detect_appindicator_package() {
+    local version_id=""
+    if [ -f /etc/os-release ]; then
+        # shellcheck disable=SC1091
+        version_id=$(. /etc/os-release && echo "${VERSION_ID:-}")
+    fi
+    
+    case "$version_id" in
+        12|13|14|trixie|bookworm)
+            echo "gir1.2-ayatanaappindicator3-0.1 libayatana-appindicator3-1"
+            ;;
+        *)
+            # Старые выпуски и Ubuntu: классический пакет, с fallback на ayatana
+            if apt-cache show gir1.2-appindicator3-0.1 &>/dev/null; then
+                echo "gir1.2-appindicator3-0.1"
+            else
+                echo "gir1.2-ayatanaappindicator3-0.1 libayatana-appindicator3-1"
+            fi
+            ;;
+    esac
+}
+
 # Clone and build byedpi
 install_byedpi() {
     local byedpi_dir="$HOME/byedpi"
@@ -89,10 +113,14 @@ check_dependencies() {
     
     local missing_deps=()
     
-    # Check required packages
-    for dep in python3 python3-gi python3-gi-cairo gir1.2-appindicator3-0.1; do
+    # AppIndicator пакет зависит от версии дистрибутива (Debian 13+: ayatana)
+    APPINDICATOR_PKGS=$(detect_appindicator_package)
+    
+    local required_pkgs=(python3 python3-gi python3-gi-cairo $APPINDICATOR_PKGS)
+    
+    for dep in "${required_pkgs[@]}"; do
         if ! dpkg -l | grep -q "^ii  $dep "; then
-            missing_deps+=($dep)
+            missing_deps+=("$dep")
         fi
     done
     
@@ -106,6 +134,23 @@ check_dependencies() {
         install_dependencies "${missing_deps[@]}"
     else
         log "All dependencies satisfied"
+    fi
+    
+    # Проверяем что typelib AppIndicator реально доступен для Python
+    if ! python3 -c "
+import gi
+gi.require_version('Gtk', '3.0')
+try:
+    gi.require_version('AppIndicator3', '0.1')
+except (ValueError, ImportError):
+    try:
+        gi.require_version('AyatanaAppIndicator3', '0.1')
+    except Exception:
+        raise SystemExit(1)
+" &>/dev/null; then
+        warn "AppIndicator typelib недоступен — индикатор будет использовать Gtk.StatusIcon fallback"
+    else
+        log "AppIndicator typelib OK"
     fi
 }
 
@@ -230,6 +275,7 @@ install_python_scripts() {
         [ -f "ciadpi_autosearch.py" ] && cp "ciadpi_autosearch.py" "$HOME/.local/bin/"
         [ -f "ciadpi_param_generator.py" ] && cp "ciadpi_param_generator.py" "$HOME/.local/bin/"
         [ -f "ciadpi_whitelist.py" ] && cp "ciadpi_whitelist.py" "$HOME/.local/bin/"  # ДОБАВЛЕНО
+        [ -f "ciadpi_strategy_search.py" ] && cp "ciadpi_strategy_search.py" "$HOME/.local/bin/"  # Поиск стратегии
         
     else
         # УДАЛЕННАЯ установка - скачиваем с GitHub
@@ -246,6 +292,7 @@ install_python_scripts() {
         wget -q -O "$HOME/.local/bin/ciadpi_autosearch.py" "$BASE_URL/ciadpi_autosearch.py" 2>/dev/null || warn "Autosearch script not available"
         wget -q -O "$HOME/.local/bin/ciadpi_param_generator.py" "$BASE_URL/ciadpi_param_generator.py" 2>/dev/null || warn "Param generator script not available"
         wget -q -O "$HOME/.local/bin/ciadpi_whitelist.py" "$BASE_URL/ciadpi_whitelist.py" 2>/dev/null || warn "Whitelist script not available"  # ДОБАВЛЕНО
+        wget -q -O "$HOME/.local/bin/ciadpi_strategy_search.py" "$BASE_URL/ciadpi_strategy_search.py" 2>/dev/null || warn "Strategy search script not available"
     fi
     
     log "Python scripts installed to ~/.local/bin/"
@@ -336,8 +383,26 @@ setup_permissions() {
     sudo usermod -a -G systemd-journal "$USER" || warn "Failed to add user to systemd-journal group"
     
     # Allow user to manage ciadpi service without password
-    echo "$USER ALL=(ALL) NOPASSWD: /bin/systemctl start ciadpi.service, /bin/systemctl stop ciadpi.service, /bin/systemctl restart ciadpi.service, /bin/systemctl status ciadpi.service" | sudo tee /etc/sudoers.d/ciadpi > /dev/null
+    # Определяем реальный путь systemctl (на новых системах /usr/bin/systemctl)
+    local systemctl_bin
+    systemctl_bin=$(command -v systemctl || echo "/usr/bin/systemctl")
+    
+    echo "$USER ALL=(ALL) NOPASSWD: ${systemctl_bin} start ciadpi.service, ${systemctl_bin} stop ciadpi.service, ${systemctl_bin} restart ciadpi.service, ${systemctl_bin} status ciadpi.service, ${systemctl_bin} enable ciadpi.service, ${systemctl_bin} disable ciadpi.service, ${systemctl_bin} daemon-reload" | sudo tee /etc/sudoers.d/ciadpi > /dev/null
+    
+    # Дублируем правило для старого пути /bin/systemctl (совместимость)
+    if [ "$systemctl_bin" != "/bin/systemctl" ] && [ -x "/bin/systemctl" ]; then
+        echo "$USER ALL=(ALL) NOPASSWD: /bin/systemctl start ciadpi.service, /bin/systemctl stop ciadpi.service, /bin/systemctl restart ciadpi.service, /bin/systemctl status ciadpi.service" | sudo tee -a /etc/sudoers.d/ciadpi > /dev/null
+    fi
+    
     sudo chmod 440 /etc/sudoers.d/ciadpi
+    
+    # Валидируем sudoers чтобы не сломать систему
+    if ! sudo visudo -c -f /etc/sudoers.d/ciadpi &>/dev/null; then
+        warn "sudoers файл невалиден — удаляем во избежание блокировки"
+        sudo rm -f /etc/sudoers.d/ciadpi
+    else
+        log "sudoers правила установлены (${systemctl_bin})"
+    fi
     
     log "Permissions configured"
 }

@@ -130,6 +130,8 @@ remove_user_files() {
         "ciadpi_launcher.sh" 
         "ciadpi_autosearch.py"
         "ciadpi_param_generator.py"
+        "ciadpi_whitelist.py"
+        "ciadpi_strategy_search.py"
     )
     
     for script in "${scripts[@]}"; do
