@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # CIADPI Complete Solution Installer for Arch Linux
-# Full featured version - equivalent to original Ubuntu installer
+# v2.1 - Совместим с трей-индикатором (системный сервис ciadpi.service + ~/byedpi/ciadpi)
 # WITHOUT system update (no pacman -Syu)
 
 set -e
@@ -18,8 +18,6 @@ BOLD='\033[1m'
 INSTALL_LOG=""
 BACKUP_DIR=""
 DESKTOP_ENV=""
-SERVICE_NAME="ciadpi.service"
-USER_SERVICE_DIR="$HOME/.config/systemd/user"
 
 # Logging functions
 log_info() {
@@ -32,6 +30,7 @@ log_warn() {
 
 log_error() {
     echo -e "$(date '+%Y-%m-%d %H:%M:%S') ${RED}[ERROR]${NC} $1" | tee -a "$INSTALL_LOG"
+    exit 1
 }
 
 log_step() {
@@ -42,10 +41,7 @@ log_step() {
 
 # Error handler
 on_error() {
-    log_error "Installation failed at line $1"
-    log_error "Exit code: $2"
-    log_info "Run uninstall script to clean up"
-    exit 1
+    log_error "Installation failed at line $1 (exit code: $2). Run uninstall script to clean up."
 }
 trap 'on_error $LINENO $?' ERR
 
@@ -67,7 +63,7 @@ echo -e "${GREEN}    CIADPI Complete Solution Installer for Arch Linux${NC}"
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 
-# Create log directory
+# Create log directory (лог живёт в logs/, удаляется только по согласию деинсталлятора)
 mkdir -p "$HOME/.config/ciadpi/logs"
 INSTALL_LOG="$HOME/.config/ciadpi/logs/install_$(date +%Y%m%d_%H%M%S).log"
 log_info "Installation log: $INSTALL_LOG"
@@ -80,16 +76,6 @@ backup_file() {
         cp "$file" "$backup_name"
         log_info "Backed up: $file -> $backup_name"
         echo "$backup_name"
-    fi
-}
-
-# Restore function
-restore_backup() {
-    local backup="$1"
-    local original="${backup%.backup_*}"
-    if [ -f "$backup" ]; then
-        cp "$backup" "$original"
-        log_info "Restored: $backup -> $original"
     fi
 }
 
@@ -138,25 +124,68 @@ install_package_if_needed() {
 check_appindicator_support() {
     log_step "Checking AppIndicator support"
     
+    # libappindicator-gtk3 даёт typelib AppIndicator3; на новых системах ayatana-вариант
+    if python -c "
+import gi
+gi.require_version('Gtk', '3.0')
+try:
+    gi.require_version('AppIndicator3', '0.1')
+except (ValueError, ImportError):
+    gi.require_version('AyatanaAppIndicator3', '0.1')
+" 2>/dev/null; then
+        log_info "AppIndicator typelib OK"
+    else
+        log_warn "AppIndicator typelib недоступен"
+        log_info "Устанавливаем libappindicator-gtk3..."
+        install_package_if_needed "libappindicator-gtk3" || true
+        # Повторная проверка после установки
+        if python -c "
+import gi
+try:
+    gi.require_version('AppIndicator3', '0.1')
+except (ValueError, ImportError):
+    gi.require_version('AyatanaAppIndicator3', '0.1')
+" 2>/dev/null; then
+            log_info "AppIndicator typelib OK (после установки)"
+        else
+            log_warn "Индикатор будет работать через Gtk.StatusIcon fallback"
+        fi
+    fi
+    
     if [ "$DESKTOP_ENV" = "gnome" ]; then
-        if ! is_package_installed "gnome-shell-extensions"; then
-            log_warn "GNOME Extensions not fully installed"
-            log_info "You may need AppIndicator extension for GNOME"
-        fi
+        log_info "Для GNOME может понадобиться расширение AppIndicator"
     elif [ "$DESKTOP_ENV" = "kde" ]; then
-        log_info "KDE Plasma has native AppIndicator support"
+        log_info "KDE Plasma имеет нативную поддержку AppIndicator"
     elif [ "$DESKTOP_ENV" = "xfce" ]; then
-        if ! is_package_installed "xfce4-indicator-plugin"; then
-            log_warn "xfce4-indicator-plugin not installed"
-            log_info "Install it for tray icon support: sudo pacman -S xfce4-indicator-plugin"
-        fi
+        is_package_installed "xfce4-indicator-plugin" || \
+            log_info "Для трея в XFCE установите: sudo pacman -S xfce4-panel-appindicator или xfce4-indicator-plugin"
+    fi
+}
+
+# Get current params from existing config (или default)
+get_current_params() {
+    local config_file="$HOME/.config/ciadpi/config.json"
+    local default_params="-o1 -o25+s -T3 -At o--tlsrec 1+s"
+    
+    if [ -f "$config_file" ]; then
+        python3 -c "
+import json
+try:
+    with open('$config_file') as f:
+        cfg = json.load(f)
+    print(cfg.get('current_params') or cfg.get('params') or '$default_params')
+except Exception:
+    print('$default_params')
+" 2>/dev/null || echo "$default_params"
+    else
+        echo "$default_params"
     fi
 }
 
 # Main installation
 main() {
     # Step 1: Detect environment
-    log_step "Step 1/15: System detection"
+    log_step "Step 1/12: System detection"
     
     DESKTOP_ENV=$(detect_desktop_environment)
     log_info "Desktop environment: $DESKTOP_ENV"
@@ -165,117 +194,73 @@ main() {
     log_info "Architecture: $(uname -m)"
     
     # Step 2: Create backup directory
-    log_step "Step 2/15: Creating backup directory"
+    log_step "Step 2/12: Creating backup directory"
     
     BACKUP_DIR="$HOME/.config/ciadpi/backups/$(date +%Y%m%d_%H%M%S)"
     mkdir -p "$BACKUP_DIR"
     log_info "Backup directory: $BACKUP_DIR"
     
     # Step 3: Backup existing configurations
-    log_step "Step 3/15: Backing up existing configurations"
+    log_step "Step 3/12: Backing up existing configurations"
     
     if [ -f "$HOME/.config/ciadpi/config.json" ]; then
-        backup_file "$HOME/.config/ciadpi/config.json" > "$BACKUP_DIR/config.json.backup.path"
+        cp "$HOME/.config/ciadpi/config.json" "$BACKUP_DIR/config.json.backup"
         log_info "Backed up config.json"
     fi
     
-    if [ -f "$HOME/.config/ciadpi/byedpi_params.conf" ]; then
-        backup_file "$HOME/.config/ciadpi/byedpi_params.conf" > "$BACKUP_DIR/params.conf.backup.path"
-        log_info "Backed up byedpi_params.conf"
-    fi
-    
     # Step 4: Install system dependencies
-    log_step "Step 4/15: Installing system dependencies"
+    log_step "Step 4/12: Installing system dependencies"
     
     DEPENDENCIES=(
         "git"
         "base-devel"
         "python"
-        "python-pip"
         "python-gobject"
         "gtk3"
         "libappindicator-gtk3"
-        "wget"
         "curl"
-        "make"
-        "gcc"
-        "net-tools"
-        "python-pipx"
     )
     
     for dep in "${DEPENDENCIES[@]}"; do
         install_package_if_needed "$dep"
     done
     
-    # Step 5: Install Python requests
-    log_step "Step 5/15: Installing Python requests"
-    
-    if pip install --user --break-system-packages requests &>/dev/null; then
-        log_info "requests installed successfully"
-    else
-        log_error "Failed to install requests"
-        exit 1
-    fi
-    
-    # Verify requests
-    if python -c "import requests" 2>/dev/null; then
-        log_info "requests module verified"
-    else
-        log_error "requests module not working"
-        exit 1
-    fi
-    
-    # Step 6: Create directory structure
-    log_step "Step 6/15: Creating directory structure"
+    # Step 5: Create directory structure
+    log_step "Step 5/12: Creating directory structure"
     
     mkdir -p "$HOME/.local/bin"
-    mkdir -p "$HOME/.config/ciadpi"
+    mkdir -p "$HOME/.config/ciadpi/logs"
     mkdir -p "$HOME/.config/autostart"
-    mkdir -p "$USER_SERVICE_DIR"
     mkdir -p "$HOME/.local/share/applications"
-    mkdir -p "$HOME/.config/ciadpi/whitelist"
     log_info "Directory structure created"
     
-    # Step 7: Build byedpi
-    log_step "Step 7/15: Building byedpi from source"
+    # Step 6: Build byedpi -> ~/byedpi/ciadpi (как ожидает индикатор)
+    log_step "Step 6/12: Building byedpi from source"
     
     cd "$HOME"
     if [ -d "$HOME/byedpi" ]; then
         log_info "byedpi directory exists, updating..."
-        cd byedpi
-        git pull 2>&1 | tee -a "$INSTALL_LOG"
+        git -C "$HOME/byedpi" pull 2>&1 | tee -a "$INSTALL_LOG"
     else
         log_info "Cloning byedpi repository..."
-        git clone https://github.com/hufrea/byedpi.git 2>&1 | tee -a "$INSTALL_LOG"
-        cd byedpi
+        git clone https://github.com/hufrea/byedpi.git "$HOME/byedpi" 2>&1 | tee -a "$INSTALL_LOG"
     fi
     
     log_info "Compiling byedpi..."
-    make clean 2>/dev/null || true
-    make 2>&1 | tee -a "$INSTALL_LOG"
+    make -C "$HOME/byedpi" clean 2>/dev/null || true
+    make -C "$HOME/byedpi" 2>&1 | tee -a "$INSTALL_LOG"
     
-    if [ -f ./ciadpi ]; then
-        cp ciadpi "$HOME/.local/bin/byedpi"
-        chmod +x "$HOME/.local/bin/byedpi"
-        log_info "byedpi installed to ~/.local/bin/byedpi"
-    elif [ -f ./byedpi ]; then
-        cp byedpi "$HOME/.local/bin/byedpi"
-        chmod +x "$HOME/.local/bin/byedpi"
-        log_info "byedpi installed to ~/.local/bin/byedpi"
-    else
-        log_error "Failed to build byedpi - binary not found"
-        exit 1
+    if [ ! -x "$HOME/byedpi/ciadpi" ]; then
+        log_error "Failed to build byedpi - ~/byedpi/ciadpi not found"
     fi
-    cd "$HOME"
+    log_info "byedpi built: $HOME/byedpi/ciadpi"
     
-    # Step 8: Download CIADPI indicator
-    log_step "Step 8/15: Downloading CIADPI indicator files"
-    
-    rm -rf /tmp/ciadpi_src
-    git clone --depth 1 https://github.com/TemplarD/ciadpi_indicator.git /tmp/ciadpi_src 2>&1 | tee -a "$INSTALL_LOG"
+    # Step 7: Install indicator files
+    log_step "Step 7/12: Installing CIADPI indicator files"
     
     INDICATOR_FILES=(
         "ciadpi_advanced_tray.py"
+        "ciadpi_strategy_search.py"
         "ciadpi_autosearch.py"
         "ciadpi_param_generator.py"
         "ciadpi_whitelist.py"
@@ -283,185 +268,180 @@ main() {
         "diagnose_ciadpi.py"
     )
     
-    for file in "${INDICATOR_FILES[@]}"; do
-        if [ -f "/tmp/ciadpi_src/$file" ]; then
-            cp "/tmp/ciadpi_src/$file" "$HOME/.local/bin/"
-            chmod +x "$HOME/.local/bin/$file"
-            log_info "Installed: $file"
-        else
-            log_warn "Missing: $file"
-        fi
-    done
-    rm -rf /tmp/ciadpi_src
+    # Локальные файлы если запущено из репозитория, иначе качаем с GitHub
+    if [ -f "ciadpi_advanced_tray.py" ]; then
+        log_info "Local installation detected"
+        SRC_DIR="$(pwd)"
+        for file in "${INDICATOR_FILES[@]}"; do
+            if [ -f "$SRC_DIR/$file" ]; then
+                cp "$SRC_DIR/$file" "$HOME/.local/bin/"
+                chmod +x "$HOME/.local/bin/$file"
+                log_info "Installed: $file"
+            else
+                log_warn "Missing in local dir: $file"
+            fi
+        done
+    else
+        log_info "Downloading from GitHub..."
+        rm -rf /tmp/ciadpi_src
+        git clone --depth 1 https://github.com/TemplarD/ciadpi_indicator.git /tmp/ciadpi_src 2>&1 | tee -a "$INSTALL_LOG"
+        
+        for file in "${INDICATOR_FILES[@]}"; do
+            if [ -f "/tmp/ciadpi_src/$file" ]; then
+                cp "/tmp/ciadpi_src/$file" "$HOME/.local/bin/"
+                chmod +x "$HOME/.local/bin/$file"
+                log_info "Installed: $file"
+            else
+                log_warn "Missing in repo: $file"
+            fi
+        done
+        rm -rf /tmp/ciadpi_src
+    fi
     
-    # Step 9: Create systemd service
-    log_step "Step 9/15: Creating systemd service"
+    # Step 8: Create systemd SYSTEM service (требование трей-индикатора)
+    log_step "Step 8/12: Creating systemd service"
     
-    cat > "$USER_SERVICE_DIR/ciadpi.service" << 'EOF'
+    CURRENT_PARAMS=$(get_current_params)
+    sudo tee /etc/systemd/system/ciadpi.service > /dev/null << EOF
 [Unit]
-Description=CIADPI - DPI Bypass Service for Arch Linux
+Description=CIADPI DPI Bypass Service
 Documentation=https://github.com/TemplarD/ciadpi_indicator
 After=network.target
+Wants=network.target
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/ciadpi_launcher.sh
+User=$USER
+WorkingDirectory=$HOME/byedpi
+ExecStart=$HOME/byedpi/ciadpi $CURRENT_PARAMS
 Restart=on-failure
 RestartSec=5
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=ciadpi
-Environment="PATH=/usr/bin:/usr/local/bin:%h/.local/bin"
+TimeoutStartSec=30
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target
 EOF
     
-    log_info "Service file created: $USER_SERVICE_DIR/ciadpi.service"
+    log_info "Service file created: /etc/systemd/system/ciadpi.service"
+    sudo systemctl daemon-reload
     
-    # Step 10: Create launcher script
-    log_step "Step 10/15: Creating launcher script"
-    
-    cat > "$HOME/.local/bin/ciadpi_launcher.sh" << 'EOF'
-#!/bin/bash
-# CIADPI Launcher for Arch Linux
-
-CONFIG_FILE="$HOME/.config/ciadpi/byedpi_params.conf"
-PID_FILE="/tmp/byedpi.pid"
-
-# Load parameters from config
-if [ -f "$CONFIG_FILE" ]; then
-    PARAMS=$(cat "$CONFIG_FILE")
-else
-    # Default parameters
-    PARAMS="--port 1080 --ip 127.0.0.1 --http --https"
-fi
-
-# Start byedpi
-~/.local/bin/byedpi $PARAMS --pidfile "$PID_FILE"
-
-# Keep running while byedpi is alive
-while kill -0 $(cat "$PID_FILE" 2>/dev/null) 2>/dev/null; do
-    sleep 2
-done
-EOF
-    
-    chmod +x "$HOME/.local/bin/ciadpi_launcher.sh"
-    log_info "Launcher script created"
-    
-    # Step 11: Setup autostart
-    log_step "Step 11/15: Setting up autostart"
-    
-    cat > "$HOME/.config/autostart/ciadpi-indicator.desktop" << EOF
-[Desktop Entry]
-Type=Application
-Name=CIADPI Indicator
-Comment=DPI Bypass System Tray Indicator
-Exec=python $HOME/.local/bin/ciadpi_advanced_tray.py
-Icon=network-wired
-Terminal=false
-StartupNotify=false
-X-GNOME-Autostart-enabled=true
-EOF
+    # Step 9: Setup autostart
+    log_step "Step 9/12: Setting up autostart"
     
     cat > "$HOME/.local/share/applications/ciadpi-indicator.desktop" << EOF
 [Desktop Entry]
+Version=1.0
 Type=Application
 Name=CIADPI Indicator
-Comment=DPI Bypass System Tray Indicator
-Exec=python $HOME/.local/bin/ciadpi_advanced_tray.py
-Icon=network-wired
-Terminal=false
+Comment=Advanced DPI Bypass Indicator
+Exec=$HOME/.local/bin/ciadpi_launcher.sh
+Icon=network-transmit-receive
 Categories=Network;
+StartupNotify=false
+Terminal=false
+X-GNOME-Autostart-enabled=true
 EOF
     
+    cp "$HOME/.local/share/applications/ciadpi-indicator.desktop" "$HOME/.config/autostart/"
     log_info "Autostart entries created for $DESKTOP_ENV"
     
-    # Step 12: Create configuration
-    log_step "Step 12/15: Creating configuration files"
+    # Step 10: Create configuration
+    log_step "Step 10/12: Creating configuration files"
     
-    cat > "$HOME/.config/ciadpi/config.json" << 'EOF'
+    # Не перезаписываем существующий конфиг пользователя
+    if [ ! -f "$HOME/.config/ciadpi/config.json" ]; then
+        cat > "$HOME/.config/ciadpi/config.json" << EOF
 {
-    "version": "1.0",
-    "proxy_enabled": true,
+    "params": "$CURRENT_PARAMS",
+    "current_params": "$CURRENT_PARAMS",
+    "proxy_enabled": false,
     "proxy_mode": "manual",
-    "proxy_host": "127.0.0.1",
+    "proxy_host": "",
     "proxy_port": "1080",
     "auto_disable_proxy": true,
     "we_changed_proxy": false,
-    "whitelist_enabled": false,
-    "whitelist_domains": [],
-    "install_date": "INSTALL_DATE_PLACEHOLDER",
-    "installer_version": "2.0-arch"
+    "install_date": "$(date -Iseconds)",
+    "installer_version": "2.1-arch"
 }
 EOF
-    
-    # Replace placeholder with actual date
-    sed -i "s/INSTALL_DATE_PLACEHOLDER/$(date -Iseconds)/" "$HOME/.config/ciadpi/config.json"
-    
-    cat > "$HOME/.config/ciadpi/byedpi_params.conf" << 'EOF'
---port 1080 --ip 127.0.0.1 --http --https
-EOF
-    
-    touch "$HOME/.config/ciadpi/whitelist.txt"
-    log_info "Configuration files created"
-    
-    # Step 13: Check AppIndicator support
-    log_step "Step 13/15: Checking AppIndicator support"
-    check_appindicator_support
-    
-    # Step 14: Start service
-    log_step "Step 14/15: Starting CIADPI service"
-    
-    systemctl --user daemon-reload
-    systemctl --user enable "$SERVICE_NAME"
-    systemctl --user start "$SERVICE_NAME"
-    
-    sleep 3
-    
-    if systemctl --user is-active "$SERVICE_NAME" &>/dev/null; then
-        log_info "CIADPI service is running"
+        log_info "Configuration created with params: $CURRENT_PARAMS"
     else
-        log_warn "Service may not be running"
-        systemctl --user status "$SERVICE_NAME" --no-pager 2>&1 | tee -a "$INSTALL_LOG"
+        log_info "Existing config.json preserved"
+        # Обновляем params в существующем конфиге если их нет
+        python3 - << 'PYEOF'
+import json
+import os
+cfg_path = os.path.expanduser('~/.config/ciadpi/config.json')
+try:
+    with open(cfg_path) as f:
+        cfg = json.load(f)
+    changed = False
+    if not cfg.get('params'):
+        cfg['params'] = cfg.get('current_params', '-o1 -o25+s -T3 -At o--tlsrec 1+s')
+        changed = True
+    if not cfg.get('current_params'):
+        cfg['current_params'] = cfg['params']
+        changed = True
+    if changed:
+        with open(cfg_path, 'w') as f:
+            json.dump(cfg, f, indent=2, ensure_ascii=False)
+        print('config updated')
+except Exception as e:
+    print(f'warn: {e}')
+PYEOF
     fi
     
-    # Step 15: Create diagnostic tools
-    log_step "Step 15/15: Creating diagnostic tools"
+    # Step 11: Setup permissions + start service
+    log_step "Step 11/12: Configuring permissions and starting service"
     
+    local systemctl_bin
+    systemctl_bin=$(command -v systemctl || echo "/usr/bin/systemctl")
+    
+    echo "$USER ALL=(ALL) NOPASSWD: ${systemctl_bin} start ciadpi.service, ${systemctl_bin} stop ciadpi.service, ${systemctl_bin} restart ciadpi.service, ${systemctl_bin} status ciadpi.service, ${systemctl_bin} enable ciadpi.service, ${systemctl_bin} disable ciadpi.service, ${systemctl_bin} daemon-reload" | sudo tee /etc/sudoers.d/ciadpi > /dev/null
+    sudo chmod 440 /etc/sudoers.d/ciadpi
+    sudo visudo -c -f /etc/sudoers.d/ciadpi &>/dev/null && log_info "sudoers OK (${systemctl_bin})" || {
+        sudo rm -f /etc/sudoers.d/ciadpi
+        log_warn "sudoers невалиден, удалён"
+    }
+    
+    sudo systemctl enable ciadpi.service || log_warn "Failed to enable service"
+    sudo systemctl start ciadpi.service || log_warn "Failed to start service"
+    
+    sleep 3
+    if systemctl is-active --quiet ciadpi.service; then
+        log_info "✓ CIADPI service is running"
+    else
+        log_warn "Service may not be running: systemctl status ciadpi.service"
+    fi
+    
+    # Step 12: Check AppIndicator support
+    log_step "Step 12/12: Checking AppIndicator support"
+    check_appindicator_support
+    
+    # Diagnostic tool
     cat > "$HOME/.local/bin/ciadpi-diagnose" << 'EOF'
 #!/bin/bash
 # CIADPI Diagnostic Tool
-
 echo "=== CIADPI Diagnostic Report ==="
 echo "Date: $(date)"
 echo "User: $USER"
-echo "Desktop: $XDG_CURRENT_DESKTOP"
 echo ""
 echo "=== Service Status ==="
-systemctl --user status ciadpi.service --no-pager
+systemctl status ciadpi.service --no-pager || true
 echo ""
 echo "=== Byedpi Process ==="
-ps aux | grep -E "(byedpi|ciadpi)" | grep -v grep
+ps aux | grep -E "(byedpi|ciadpi)" | grep -v grep || true
 echo ""
 echo "=== Proxy Configuration ==="
 cat ~/.config/ciadpi/config.json 2>/dev/null || echo "No config found"
 echo ""
-echo "=== Byedpi Parameters ==="
-cat ~/.config/ciadpi/byedpi_params.conf 2>/dev/null || echo "No params file"
-echo ""
 echo "=== Service Logs (last 20 lines) ==="
-journalctl --user -u ciadpi.service -n 20 --no-pager
-echo ""
-echo "=== Installation Logs ==="
-ls -la ~/.config/ciadpi/logs/ 2>/dev/null || echo "No logs found"
+journalctl -u ciadpi.service -n 20 --no-pager || true
 echo ""
 echo "=== Network Check ==="
-echo "Proxy configured: 127.0.0.1:1080"
-echo "Testing connection..."
-curl -s --proxy http://127.0.0.1:1080 --connect-timeout 2 https://httpbin.org/ip 2>/dev/null && echo "Proxy works!" || echo "Proxy not responding"
+echo "Testing proxy 127.0.0.1:1080..."
+curl -s --proxy http://127.0.0.1:1080 --connect-timeout 3 https://www.google.com/generate_204 >/dev/null 2>&1 && echo "Proxy works!" || echo "Proxy not responding"
 EOF
-    
     chmod +x "$HOME/.local/bin/ciadpi-diagnose"
     log_info "Diagnostic tool created: ~/.local/bin/ciadpi-diagnose"
     
@@ -473,36 +453,23 @@ EOF
     echo ""
     echo -e "${BOLD}📊 Installation Summary:${NC}"
     echo -e "  • Desktop Environment: $DESKTOP_ENV"
-    echo -e "  • Service Status: $(systemctl --user is-active "$SERVICE_NAME" 2>/dev/null || echo 'unknown')"
+    echo -e "  • Service Status: $(systemctl is-active ciadpi.service 2>/dev/null || echo 'unknown')"
+    echo -e "  • Params: $CURRENT_PARAMS"
     echo -e "  • Install Log: $INSTALL_LOG"
-    echo -e "  • Backup Dir: $BACKUP_DIR"
     echo ""
     echo -e "${BOLD}📌 Quick Commands:${NC}"
-    echo -e "  ${GREEN}▶ Start indicator:${NC}   python ~/.local/bin/ciadpi_advanced_tray.py"
-    echo -e "  ${GREEN}▶ Service status:${NC}    systemctl --user status ciadpi.service"
-    echo -e "  ${GREEN}▶ Stop service:${NC}       systemctl --user stop ciadpi.service"
-    echo -e "  ${GREEN}▶ View logs:${NC}          journalctl --user -u ciadpi.service -f"
-    echo -e "  ${GREEN}▶ Diagnostics:${NC}        ~/.local/bin/ciadpi-diagnose"
+    echo -e "  ${GREEN}▶ Start indicator:${NC}   ~/.local/bin/ciadpi_launcher.sh"
+    echo -e "  ${GREEN}▶ Service status:${NC}    systemctl status ciadpi.service"
+    echo -e "  ${GREEN}▶ View logs:${NC}         journalctl -u ciadpi.service -f"
+    echo -e "  ${GREEN}▶ Diagnostics:${NC}       ~/.local/bin/ciadpi-diagnose"
     echo ""
     echo -e "${BOLD}🔧 Proxy Configuration:${NC}"
     echo -e "  • Proxy address: ${GREEN}127.0.0.1:1080${NC}"
     echo -e "  • Leave HOST field ${GREEN}EMPTY${NC} in browser proxy settings"
-    echo -e "  • For Firefox: Settings → Network → Manual proxy configuration"
-    echo ""
-    echo -e "${BOLD}🖥️  Desktop Environment Tips:${NC}"
-    
-    if [ "$DESKTOP_ENV" = "gnome" ]; then
-        echo -e "  • Install AppIndicator extension for GNOME"
-        echo -e "  • Extension: gnome-shell-extension-appindicator"
-    elif [ "$DESKTOP_ENV" = "xfce" ]; then
-        echo -e "  • Install: sudo pacman -S xfce4-indicator-plugin"
-    fi
-    
     echo ""
     echo -e "${YELLOW}⚠️  IMPORTANT: You need to log out and log back in for the tray icon to appear${NC}"
     echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     
-    # Write to log that installation completed successfully
     log_info "Installation completed successfully"
 }
 
