@@ -1,0 +1,87 @@
+# Arch post-install hook (для pacman <6.1 style .install)
+# Настраивает сервис и права после установки.
+
+post_install() {
+    REAL_USER="${SUDO_USER:-$(logname 2>/dev/null || echo '')}"
+    if [ -z "$REAL_USER" ] || [ "$REAL_USER" = "root" ]; then
+        echo "==> ciadpi-indicator: не удалось определить пользователя."
+        echo "==> Выполните вручную:"
+        echo "==>   sudo -E bash /usr/bin/ciadpi-privileges-setup"
+        echo "==>   и создайте /etc/systemd/system/ciadpi.service"
+        return 0
+    fi
+
+    USER_HOME=$(getent passwd "$REAL_USER" | cut -d: -f6)
+
+    # byedpi если нет
+    if [ ! -x "$USER_HOME/byedpi/ciadpi" ] && [ ! -x /usr/bin/ciadpi ]; then
+        echo "==> Собираем byedpi для $REAL_USER..."
+        sudo -u "$REAL_USER" bash -c '
+            set -e
+            if [ -d ~/byedpi ]; then git -C ~/byedpi pull --ff-only || true
+            else git clone https://github.com/hufrea/byedpi.git ~/byedpi; fi
+            make -C ~/byedpi clean >/dev/null 2>&1 || true
+            make -C ~/byedpi'
+    fi
+
+    CIADPI_BIN=""
+    for cand in "$USER_HOME/byedpi/ciadpi" /usr/bin/ciadpi; do
+        [ -x "$cand" ] && CIADPI_BIN="$cand" && break
+    done
+
+    if [ -n "$CIADPI_BIN" ]; then
+        cat > /etc/systemd/system/ciadpi.service <<UNIT
+[Unit]
+Description=CIADPI DPI Bypass Service
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=$REAL_USER
+WorkingDirectory=$(dirname "$CIADPI_BIN")
+ExecStart=$CIADPI_BIN -o1 -o25+s -T3 -At o--tlsrec 1+s
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=30
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+        systemctl daemon-reload
+        systemctl enable ciadpi.service 2>/dev/null || true
+    fi
+
+    SUDO_USER="$REAL_USER" bash /usr/bin/ciadpi-privileges-setup || true
+
+    AUTO_DIR="$USER_HOME/.config/autostart"
+    mkdir -p "$AUTO_DIR"
+    cp /usr/share/applications/ciadpi-indicator.desktop "$AUTO_DIR/" 2>/dev/null || true
+    chown -R "$REAL_USER:$REAL_USER" "$USER_HOME/.config" 2>/dev/null || true
+
+    echo "==> ciadpi-indicator установлен. Запуск: меню приложений или 'ciadpi-indicator'."
+}
+
+post_upgrade() {
+    post_install
+}
+
+pre_remove() {
+    systemctl stop ciadpi.service 2>/dev/null || true
+    systemctl disable ciadpi.service 2>/dev/null || true
+    pkill -f ciadpi_advanced_tray.py 2>/dev/null || true
+    true
+}
+
+post_remove() {
+    rm -f /etc/systemd/system/ciadpi.service
+    rm -f /etc/sudoers.d/ciadpi
+    rm -f /etc/polkit-1/rules.d/49-ciadpi-indicator.rules
+    systemctl daemon-reload 2>/dev/null || true
+    REAL_USER="${SUDO_USER:-}"
+    if [ -n "$REAL_USER" ]; then
+        USER_HOME=$(getent passwd "$REAL_USER" | cut -d: -f6)
+        rm -f "$USER_HOME/.config/autostart/ciadpi-indicator.desktop"
+    fi
+    true
+}

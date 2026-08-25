@@ -314,6 +314,45 @@ class AdvancedTrayIndicator:
         except:
             return self.default_params
 
+    def _locate_ciadpi(self, username=None):
+        """Найти каталог и бинарник ciadpi.
+
+        Приоритет:
+          1. ExecStart установленного ciadpi.service (пакетная установка)
+          2. ~/byedpi/ciadpi  (скриптовая установка)
+          3. /usr/bin/ciadpi  (пакет byedpi/ciadpi-byedpi)
+        Возвращает (byedpi_dir|None, binary_path|None).
+        """
+        # 1) Из текущего юнита
+        try:
+            r = subprocess.run(
+                ['systemctl', 'show', 'ciadpi.service',
+                 '--property=ExecStart', '--no-pager'],
+                capture_output=True, text=True, timeout=5
+            )
+            if r.returncode == 0 and 'argv[]=' in r.stdout:
+                argv = r.stdout.split('argv[]=')[1].split(';')[0].split()
+                if argv:
+                    bin_path = Path(argv[0])
+                    if bin_path.exists():
+                        return bin_path.parent, bin_path
+        except Exception:
+            pass
+
+        home_dir = Path.home()
+
+        # 2) Скриптовая установка
+        script_bin = home_dir / 'byedpi' / 'ciadpi'
+        if script_bin.exists():
+            return script_bin.parent, script_bin
+
+        # 3) Пакетный бинарник
+        for cand in (Path('/usr/bin/ciadpi'), Path('/usr/local/bin/ciadpi')):
+            if cand.exists():
+                return cand.parent, cand
+
+        return None, None
+
     def _systemctl(self, *args):
         """Запуск systemctl для ciadpi.service с fallback на pkexec (GUI-пароль).
         Возвращает (ok, stderr)."""
@@ -482,12 +521,11 @@ class AdvancedTrayIndicator:
             # Получаем данные пользователя динамически
             username = os.environ.get('USER')
             home_dir = Path.home()
-            byedpi_dir = home_dir / 'byedpi'
-            ciadpi_binary = byedpi_dir / 'ciadpi'
+            byedpi_dir, ciadpi_binary = self._locate_ciadpi(username)
 
-            # Проверяем что бинарник существует
-            if not ciadpi_binary.exists():
-                error_msg = f"Бинарник ciadpi не найден: {ciadpi_binary}"
+            if not ciadpi_binary:
+                error_msg = ("Бинарник ciadpi не найден. Установите byedpi "
+                             "(~/byedpi) или пакет ciadpi-byedpi.")
                 print(f"❌ {error_msg}")
                 self.show_notification("Ошибка", error_msg)
                 return False
@@ -2284,13 +2322,15 @@ class AdvancedTrayIndicator:
           4. Резервная копия старого бинарника + перезапуск сервиса
         """
         def update_thread():
-            byedpi_dir = Path.home() / 'byedpi'
-            binary = byedpi_dir / 'ciadpi'
-            backup = byedpi_dir / 'ciadpi.bak'
+            byedpi_dir, binary = self._locate_ciadpi(os.environ.get('USER'))
+            backup = (byedpi_dir / 'ciadpi.bak') if byedpi_dir else None
 
-            if not byedpi_dir.exists():
+            if not byedpi_dir or not binary:
                 GLib.idle_add(self.show_notification,
-                              "Ошибка", f"Каталог {byedpi_dir} не найден")
+                              t('notif.error'),
+                              "byedpi git-каталог не найден (~~/byedpi). "
+                              "При пакетной установке обновление выполняется "
+                              "через менеджер пакетов.")
                 return
 
             def log(msg):

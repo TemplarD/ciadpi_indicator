@@ -31,7 +31,42 @@ Complete DPI bypass solution with system tray indicator. Includes byedpi and man
 
 ## 📦 Installation
 
-### Ubuntu / Debian / Mint
+### Option 1: Packages (recommended)
+
+Prebuilt packages install the indicator system-wide (`/usr/lib/ciadpi-indicator`, `/usr/bin/ciadpi-indicator`), create and enable the `ciadpi.service`, set up passwordless privileges, and register the desktop entry — all in one step.
+
+**Debian / Ubuntu / Mint (.deb):**
+
+```bash
+# Скачать последний релиз со страницы Releases и установить:
+sudo apt install ./ciadpi-indicator_1.5.0_all.deb
+```
+
+Сборка из исходников этого репозитория:
+
+```bash
+git clone https://github.com/TemplarD/ciadpi_indicator.git
+cd ciadpi_indicator/packaging
+./build_deb.sh            # → dist/ciadpi-indicator_1.5.0_all.deb
+sudo apt install ../dist/ciadpi-indicator_1.5.0_all.deb
+```
+
+**Arch Linux / Manjaro (PKGBUILD):**
+
+```bash
+git clone https://github.com/TemplarD/ciadpi_indicator.git
+cd ciadpi_indicator/packaging
+makepkg -si               # соберёт и установит пакет
+```
+
+Удаление пакета: `sudo apt remove ciadpi-indicator` (Debian) или `sudo pacman -R ciadpi-indicator` (Arch). При `purge`/`-R` убираются и сервис с правами.
+
+### Option 2: Script installation
+
+Скриптовая установка ставит всё в домашнюю директорию (`~/.local/bin`, `~/byedpi`) — обновляться можно прямо из трея. Пакетная — в системные каталоги, обновление через менеджер пакетов.
+
+#### Debian / Ubuntu / Mint
+
 
 ```bash
 wget -O install_ciadpi.sh https://raw.githubusercontent.com/templard/ciadpi_indicator/master/install_ciadpi_complete.sh
@@ -52,7 +87,12 @@ The Arch installer builds byedpi into `~/byedpi/ciadpi` and creates a **system**
 
 ## 🗑️ Uninstallation
 
-### Ubuntu / Debian / Mint
+**Package install:** `sudo apt remove ciadpi-indicator` / `sudo pacman -R ciadpi-indicator`
+(add `purge` / `-Rns` to also remove the service unit, sudoers and polkit rules).
+
+### Script installation
+
+#### Ubuntu / Debian / Mint
 
 ```bash
 wget -O uninstall_ciadpi.sh https://raw.githubusercontent.com/templard/ciadpi_indicator/master/uninstall_ciadpi_complete.sh
@@ -71,7 +111,7 @@ Both uninstallers ask before removing `~/byedpi` and configs; a config backup is
 
 #### About byedpi
 
-This solution uses **[byedpi](https://github.com/hufrea/byedpi)** as the core DPI bypass engine. byedpi is automatically downloaded and compiled during installation.
+This solution uses **[byedpi](https://github.com/hufrea/byedpi)** as the core DPI bypass engine. byedpi is automatically downloaded and compiled during installation (or pulled as a dependency with the package install).
 
 byedpi features:
 - Multiple obfuscation methods
