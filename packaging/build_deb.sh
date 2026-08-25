@@ -109,10 +109,12 @@ if [ -z "$REAL_USER" ] || [ "$REAL_USER" = "root" ]; then
     echo "postinst: не удалось определить пользователя — пропускаю per-user настройку."
     echo "Запустите позже: sudo -E bash /usr/bin/ciadpi-privileges-setup"
 else
-    # 1) Бинарник ciadpi: если нет ни ~/byedpi, ни пакета — собираем из git
-    if ! sudo -u "$REAL_USER" test -x "$HOME/../$REAL_USER/byedpi/ciadpi" 2>/dev/null && \
+    USER_HOME=$(getent passwd "$REAL_USER" | cut -d: -f6)
+
+    # 1) Бинарник ciadpi: если нет ни ~/byedpi, ни пакета — подтягиваем СВЕЖИЙ из git
+    if ! sudo -u "$REAL_USER" test -x "$USER_HOME/byedpi/ciadpi" 2>/dev/null && \
        [ ! -x /usr/bin/ciadpi ]; then
-        echo "postinst: собираем byedpi для $REAL_USER..."
+        echo "postinst: подтягиваем свежий byedpi для $REAL_USER..."
         sudo -u "$REAL_USER" bash -c '
             set -e
             if [ -d ~/byedpi ]; then git -C ~/byedpi pull --ff-only || true
@@ -122,7 +124,6 @@ else
     fi
 
     # 2) systemd unit с путём реального пользователя
-    USER_HOME=$(getent passwd "$REAL_USER" | cut -d: -f6)
     CIADPI_BIN=""
     for cand in "$USER_HOME/byedpi/ciadpi" /usr/bin/ciadpi; do
         [ -x "$cand" ] && CIADPI_BIN="$cand" && break
