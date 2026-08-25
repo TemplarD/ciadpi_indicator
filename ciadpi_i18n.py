@@ -201,6 +201,15 @@ _STRINGS = {
     'settings.validation_error': {'ru': 'Ошибка в параметрах:', 'en': 'Parameter error:'},
     'builder.help_section': {'ru': 'Раздел:', 'en': 'Section:'},
 
+    # ---- Справка / О программе / смена языка ----
+    'help.title':      {'ru': 'Расширенная справка', 'en': 'Extended Reference'},
+    'about.title':     {'ru': 'О программе', 'en': 'About'},
+    'app.lang_restart': {'ru': 'Язык изменён. Изменение применится после перезапуска индикатора (Выход → запуск).',
+                         'en': 'Language changed. It takes effect after restarting the indicator (Exit → launch).'},
+    'app.lang_restart_ru_title': {'ru': 'Язык изменён на русский',
+                                  'en': 'Language changed to Russian'},
+    'app.lang_restart_en_title': {'ru': 'Language changed to English',
+                                  'en': 'Language changed to English'},
 }
 
 

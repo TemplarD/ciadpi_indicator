@@ -33,6 +33,13 @@ except ImportError:
     def save_lang(): pass
 
 try:
+    from ciadpi_texts import HELP_TEXTS, ABOUT_TEXTS
+    TEXTS_AVAILABLE = True
+except ImportError:
+    TEXTS_AVAILABLE = False
+    HELP_TEXTS, ABOUT_TEXTS = {}, {}
+
+try:
     from ciadpi_params_spec import CONTROLS, parse_params, get_value, build_params, HELP_SECTIONS
     PARAMS_SPEC_AVAILABLE = True
 except ImportError:
@@ -960,7 +967,7 @@ class AdvancedTrayIndicator:
         menu.append(strategy_item)
 
         # Обновление byedpi без переустановки
-        byedpi_update_item = Gtk.MenuItem(label="⬆️ Обновить byedpi")
+        byedpi_update_item = Gtk.MenuItem(label=t('menu.byedpi_update'))
         byedpi_update_item.connect("activate", self.update_byedpi)
         menu.append(byedpi_update_item)
 
@@ -2636,60 +2643,14 @@ class AdvancedTrayIndicator:
     # ================= /КОНСТРУКТОР ПАРАМЕТРОВ =================
 
     def show_help(self, widget):
-        """Окно расширенной справки по параметрам"""
-        help_text = """📚 CIADPI Advanced Indicator - Полная справка
+        """Окно расширенной справки по параметрам (на языке интерфейса)"""
+        lang = get_lang()
+        help_text = HELP_TEXTS.get(lang) or HELP_TEXTS.get('ru', '')
+        if not help_text:
+            help_text = "Справка недоступна / Reference unavailable"
 
-    🎯 ОСНОВНЫЕ ВОЗМОЖНОСТИ:
 
-    🛠️ Управление сервисом:
-    • Запуск/остановка/перезапуск сервиса CIADPI
-    • Мониторинг статуса в реальном времени
-    • Автоматическое применение параметров
-
-    🔌 Умное управление прокси:
-    • Автоматическая настройка системного прокси
-    • Резервное копирование оригинальных настроек
-    • Восстановление настроек при остановке
-    • Поддержка белого списка доменов
-
-    ⚡ Оптимизация параметров:
-    • Встроенная проверка параметров CIADPI
-    • Готовые примеры конфигураций
-    • История тестирования (с модулем автопоиска)
-
-    📋 ПАРАМЕТРЫ CIADPI:
-
-    Основные параметры:
-    -i IP      - целевой IP адрес
-    -p PORT    - целевой порт
-    -D         - демонизация
-    -w NUM     - количество рабочих потоков
-    -c FILE    - файл конфигурации
-
-    Методы обхода (-o):
-    -o1 до -o25 - различные методы обхода
-    Суффиксы: +s (SSL), +m (MSS), +e (ECN)
-
-    Примеры рабочих конфигураций:
-    • -o1 -o25+s -T3 -At o--tlsrec 1+s
-    • -o2 -o15+s -T2 -At o--tlsrec
-    • -o3 -o20+s -T3 -At o--tlsrec 2+s
-
-    🔧 ДОПОЛНИТЕЛЬНЫЕ ФУНКЦИИ:
-
-    • Системные уведомления
-    • Подробное логирование
-    • Поддержка разных окружений рабочего стола
-    • Резервные механики (Gtk.StatusIcon)
-
-    💡 СОВЕТЫ:
-    • Используйте примеры для быстрого старта
-    • Включите автоотключение прокси для ноутбуков и мобильных рабочих станций
-    • Настройте белый список для локальных ресурсов
-    • Проверяйте логи при возникновении проблем
-    """
-
-        dialog = Gtk.Dialog(title="Расширенная справка", flags=0)
+        dialog = Gtk.Dialog(title=t('help.title'), flags=0)
         dialog.add_buttons(Gtk.STOCK_OK, Gtk.ResponseType.OK)
         dialog.set_default_size(600, 500)
         
@@ -2711,39 +2672,12 @@ class AdvancedTrayIndicator:
         dialog.destroy()
 
     def show_about(self, widget):
-        """Окно 'О программе' с подробной информацией"""
-        about_text = """🔰 CIADPI Advanced Indicator v1.2.1
+        """Окно «О программе» (на языке интерфейса)"""
+        lang = get_lang()
+        about_text = ABOUT_TEXTS.get(lang) or ABOUT_TEXTS.get('ru', '')
 
-    📡 Продвинутый индикатор для управления сервисом обхода DPI
 
-    🌟 ОСНОВНЫЕ ФУНКЦИИ:
-    • Автоматизированное управление прокси
-    • Автоматическая оптимизация параметров
-    • Мониторинг статуса в системном трее
-    • Поддержка белого списка
-
-    🛠️ ТЕХНОЛОГИИ:
-    • Python 3 + GTK 3
-    • AppIndicator3 / Gtk.StatusIcon
-    • Systemd service integration
-    • D-Bus integration
-
-    📊 СИСТЕМНЫЕ ТРЕБОВАНИЯ:
-    • Linux с systemd
-    • GNOME или совместимая среда рабочего стола
-    • Права sudo для управления сервисом
-
-    🔗 ПРОЕКТ ОСНОВАН НА:
-    • byedpi/ciadpi - https://github.com/hufrea/byedpi
-    • Идейно на лаунчере Zapret для windows с сайта https://topersoft.com    
-    • Теме на ru форуме Ubuntu по byeDPI (форум цензурный и не юзерфрендли по этому без ссылки на него соответственно) 
-
-    🔗 ЛИЦЕНЗИЯ: MIT License
-
-    💻 РАЗРАБОТЧИК: Templard
-    """
-
-        dialog = Gtk.Dialog(title="О программе", flags=0)
+        dialog = Gtk.Dialog(title=t('about.title'), flags=0)
         dialog.add_buttons(Gtk.STOCK_OK, Gtk.ResponseType.OK)
         dialog.set_default_size(450, 400)
         
@@ -2908,7 +2842,8 @@ class AdvancedTrayIndicator:
 
         # Сохранение при закрытии
         new_lang = 'ru' if lang_combo.get_active() == 0 else 'en'
-        if new_lang != get_lang():
+        lang_changed = new_lang != get_lang()
+        if lang_changed:
             set_lang(new_lang)
             save_lang()
 
@@ -2919,9 +2854,25 @@ class AdvancedTrayIndicator:
         self.app_prefs["autostart_indicator"] = chk_autostart.get_active()
         self._save_app_prefs()
         self._set_autostart(chk_autostart.get_active())
+        dialog.destroy()
+
+        # ⭐ Уведомление о смене языка — на ОБОИХ языках (пользователь
+        # мог не понять сообщение на новом языке)
+        if lang_changed:
+            info = Gtk.MessageDialog(
+                transient_for=None, flags=0,
+                message_type=Gtk.MessageType.INFO,
+                buttons=Gtk.ButtonsType.OK,
+                title=t('app.lang_restart_ru_title') + " / " +
+                      t('app.lang_restart_en_title'),
+                text="🇷🇺 " + t('app.lang_restart')
+                     + "\n\n🇬🇧 The language change takes effect after "
+                       "restarting the indicator (Exit → launch)."
+            )
+            info.run()
+            info.destroy()
 
         self.show_notification(t('notif.success'), t('app.saved'))
-        dialog.destroy()
 
     def show_notification(self, title, message, category=None):
         """Уведомление с учётом пользовательских фильтров.
