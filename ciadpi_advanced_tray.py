@@ -615,7 +615,7 @@ class AdvancedTrayIndicator:
                         self.apply_system_proxy('manual', host, port)
                     except Exception as e:
                         print(f"⚠️ Прокси не применён после обновления: {e}")
-                self.show_notification("Успех", "Параметры обновлены и сервис запущен")
+                self.show_notification(t('notif.success'), t('notif.params_updated'), category='params')
                 return True
             else:
                 # Если сервис не запустился, показываем ошибку
@@ -901,21 +901,21 @@ class AdvancedTrayIndicator:
         menu = Gtk.Menu()
         
         # Статус
-        self.status_item = Gtk.MenuItem(label="🔄 Проверка статуса...")
+        self.status_item = Gtk.MenuItem(label=t('menu.status'))
         menu.append(self.status_item)
         
         menu.append(Gtk.SeparatorMenuItem())
         
         # Управление сервисом
-        start_item = Gtk.MenuItem(label="▶️ Запустить сервис")
+        start_item = Gtk.MenuItem(label=t('menu.start'))
         start_item.connect("activate", self.start_service)
         menu.append(start_item)
         
-        stop_item = Gtk.MenuItem(label="⏹️ Остановить сервис")
+        stop_item = Gtk.MenuItem(label=t('menu.stop'))
         stop_item.connect("activate", self.stop_service)
         menu.append(stop_item)
         
-        restart_item = Gtk.MenuItem(label="🔄 Перезапустить сервис")
+        restart_item = Gtk.MenuItem(label=t('menu.restart'))
         restart_item.connect("activate", self.restart_service)
         menu.append(restart_item)
         
@@ -936,7 +936,7 @@ class AdvancedTrayIndicator:
         menu.append(proxy_item)
 
         # БЕЛЫЙ СПИСОК
-        whitelist_item = Gtk.MenuItem(label="📝 Белый список")
+        whitelist_item = Gtk.MenuItem(label=t('menu.whitelist'))
         whitelist_item.connect("activate", self.show_whitelist_dialog)
         menu.append(whitelist_item)        
         
@@ -944,11 +944,11 @@ class AdvancedTrayIndicator:
         
         # Автопоиск и история
         if self.autosearcher:
-            autosearch_item = Gtk.MenuItem(label="🔍 Автопоиск параметров")
+            autosearch_item = Gtk.MenuItem(label=t('menu.autosearch'))
             autosearch_item.connect("activate", self.show_autosearch_dialog)
             menu.append(autosearch_item)
 
-            history_item = Gtk.MenuItem(label="📊 История тестирования")
+            history_item = Gtk.MenuItem(label=t('menu.history'))
             history_item.connect("activate", self.show_history)
             menu.append(history_item)
 
@@ -975,25 +975,25 @@ class AdvancedTrayIndicator:
         menu.append(app_settings_item)
         
         # Логи
-        logs_item = Gtk.MenuItem(label="📋 Показать логи")
+        logs_item = Gtk.MenuItem(label=t('menu.logs'))
         logs_item.connect("activate", self.show_logs)
         menu.append(logs_item)
         
         menu.append(Gtk.SeparatorMenuItem())
         
         # Справка
-        help_item = Gtk.MenuItem(label="❓ Справка по параметрам")
+        help_item = Gtk.MenuItem(label=t('menu.help'))
         help_item.connect("activate", self.show_help)
         menu.append(help_item)
         
-        about_item = Gtk.MenuItem(label="ℹ️ О программе")
+        about_item = Gtk.MenuItem(label=t('menu.about'))
         about_item.connect("activate", self.show_about)
         menu.append(about_item)
         
         menu.append(Gtk.SeparatorMenuItem())
         
         # Выход
-        exit_item = Gtk.MenuItem(label="🚪 Выход")
+        exit_item = Gtk.MenuItem(label=t('menu.exit'))
         exit_item.connect("activate", self.exit_app)
         menu.append(exit_item)
         
@@ -1370,8 +1370,9 @@ class AdvancedTrayIndicator:
             # Применяем переменные окружения
             self.apply_environment_proxy(mode, host, port)
             
-            # Перезапускаем NetworkManager для применения настроек
-            self.restart_network_services()
+            # NetworkManager/systemd-resolved НЕ перезапускаем:
+            # gsettings применяются на лету, а рестарт служб рвёт сеть
+            # и выглядит как «что-то запускается при старте».
             
             return True
             
@@ -1441,8 +1442,15 @@ class AdvancedTrayIndicator:
         return {}
 
     def check_current_proxy(self):
-        """Проверка текущих системных настроек прокси"""
+        """Проверка текущих системных настроек прокси.
+
+        ⭐ В локальном режиме ('local') НЕ перезаписываем наш конфиг
+        системным состоянием — иначе локальные настройки теряются."""
         try:
+            # Локальный режим: системный прокси нас не интересует
+            if self.current_params.get('proxy_mode') == 'local':
+                return
+
             # Проверяем настройки GNOME
             result = subprocess.run([
                 'gsettings', 'get', 'org.gnome.system.proxy', 'mode'
@@ -1602,25 +1610,21 @@ class AdvancedTrayIndicator:
             return False              
 
     def run_command(self, command):
+        """Выполнение systemctl-команды через _systemctl (без запроса пароля)."""
         def run_in_thread():
             try:
-                env = os.environ.copy()
-                proxy_env = self.get_proxy_env()
-                env.update(proxy_env)
-                
-                result = subprocess.run(
-                    ['sudo'] + command.split(),
-                    capture_output=True, text=True, timeout=10,
-                    env=env
-                )
-                if result.returncode == 0:
-                    self.show_notification("Успех", "Команда выполнена")
+                args = command.split()
+                if args and args[0] == 'systemctl':
+                    args = args[1:]
+                ok, err = self._systemctl(*args)
+                if ok:
+                    self.show_notification(t('notif.success'), t('notif.command_ok'), category='service')
                 else:
-                    self.show_notification("Ошибка", result.stderr)
+                    self.show_notification(t('notif.error'), err or "systemctl error", category='service')
                 time.sleep(1)
                 self.update_status()
             except Exception as e:
-                self.show_notification("Ошибка", str(e))
+                self.show_notification(t('notif.error'), str(e), category='service')
         
         threading.Thread(target=run_in_thread, daemon=True).start()
 
@@ -1651,9 +1655,9 @@ class AdvancedTrayIndicator:
                         host = self.current_params.get("proxy_host", "")
                         port = self.current_params.get("proxy_port", "1080")
                         self.apply_system_proxy('manual', host, port)
-                        self.show_notification("Сервис запущен", "Наши настройки прокси применены")
+                        self.show_notification(t('notif.success'), t('notif.service_started_proxy'), category='service')
                     else:
-                        self.show_notification("Сервис запущен", "Сервис запущен успешно")
+                        self.show_notification(t('notif.success'), t('notif.service_started'), category='service')
                         
                 else:
                     self.show_notification("Ошибка", result.stderr)
@@ -1689,7 +1693,7 @@ class AdvancedTrayIndicator:
                     )
                     
                     if result.returncode == 0:
-                        self.show_notification("Сервис остановлен", "Системные настройки прокси восстановлены")
+                        self.show_notification(t('notif.service_stopped'), t('proxy.mode_off'), category='service')
                     else:
                         self.show_notification("Ошибка", result.stderr)
                         
@@ -1803,7 +1807,7 @@ class AdvancedTrayIndicator:
         try:        
 ###            
             """Диалог настроек параметров"""
-            dialog = Gtk.Dialog(title="Настройки параметров CIADPI", flags=0)
+            dialog = Gtk.Dialog(title=t('settings.dialog_title'), flags=0)
             dialog.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
                             Gtk.STOCK_OK, Gtk.ResponseType.OK)
             dialog.set_default_size(700, 400)
@@ -1817,7 +1821,7 @@ class AdvancedTrayIndicator:
             main_box.set_margin_end(10)
             
             # Основное поле ввода
-            label = Gtk.Label(label="Параметры запуска CIADPI:")
+            label = Gtk.Label(label=t('settings.params_label'))
             label.set_xalign(0)
             entry = Gtk.Entry()
             current_params = self.get_current_service_params()
@@ -1835,7 +1839,7 @@ class AdvancedTrayIndicator:
             examples_box.set_margin_end(10)
             
             examples_title = Gtk.Label()
-            examples_title.set_markup("<b>Примеры параметров (кликните для копирования):</b>")
+            examples_title.set_markup("<b>" + t('settings.examples') + "</b>")
             examples_title.set_xalign(0)
             examples_box.pack_start(examples_title, False, False, 0)
             
@@ -1881,7 +1885,7 @@ class AdvancedTrayIndicator:
             
             # Подсказка
             hint_label = Gtk.Label()
-            hint_label.set_markup("<small>💡 Параметры проверяются автоматически при сохранении</small>")
+            hint_label.set_markup("<small>" + t('settings.hint') + "</small>")
             hint_label.set_xalign(0)
             hint_label.set_sensitive(False)
             
@@ -1911,7 +1915,7 @@ class AdvancedTrayIndicator:
                         transient_for=dialog, flags=0,
                         message_type=Gtk.MessageType.ERROR,
                         buttons=Gtk.ButtonsType.OK,
-                        text=f"Ошибка в параметрах:\n{err_msg}"
+                        text=t('settings.validation_error') + "\n" + err_msg
                     )
                     err_dialog.run()
                     err_dialog.destroy()
@@ -2243,7 +2247,7 @@ class AdvancedTrayIndicator:
                     dialog.set_sensitive(True)
                     if success:
                         ui_log(f"✅ Параметры применены: {params}")
-                        self.show_notification("Успех", "Лучшие параметры применены к сервису")
+                        self.show_notification(t('notif.success'), t('notif.best_applied'), category='params')
                     else:
                         ui_log(f"❌ Не удалось применить параметры: {params}")
                     return False
@@ -2627,7 +2631,7 @@ class AdvancedTrayIndicator:
         """Открыть полную справку и подсказать нужный раздел."""
         self.show_help(None)
         self.show_notification('❓ ' + t('menu.help'),
-                               f"Раздел: {section}" if section else '')
+                               (t('builder.help_section') + " " + section) if section else '')
 
     # ================= /КОНСТРУКТОР ПАРАМЕТРОВ =================
 

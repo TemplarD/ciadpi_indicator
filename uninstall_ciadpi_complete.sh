@@ -133,6 +133,9 @@ remove_user_files() {
         "ciadpi_param_generator.py"
         "ciadpi_whitelist.py"
         "ciadpi_strategy_search.py"
+        "ciadpi_i18n.py"
+        "ciadpi_params_spec.py"
+        "ciadpi_privileges.sh"
     )
     
     for script in "${scripts[@]}"; do

@@ -274,8 +274,10 @@ install_python_scripts() {
         [ -f "ciadpi_launcher.sh" ] && cp "ciadpi_launcher.sh" "$HOME/.local/bin/" && chmod +x "$HOME/.local/bin/ciadpi_launcher.sh"
         [ -f "ciadpi_autosearch.py" ] && cp "ciadpi_autosearch.py" "$HOME/.local/bin/"
         [ -f "ciadpi_param_generator.py" ] && cp "ciadpi_param_generator.py" "$HOME/.local/bin/"
-        [ -f "ciadpi_whitelist.py" ] && cp "ciadpi_whitelist.py" "$HOME/.local/bin/"  # ДОБАВЛЕНО
-        [ -f "ciadpi_strategy_search.py" ] && cp "ciadpi_strategy_search.py" "$HOME/.local/bin/"  # Поиск стратегии
+        [ -f "ciadpi_whitelist.py" ] && cp "ciadpi_whitelist.py" "$HOME/.local/bin/"
+        [ -f "ciadpi_strategy_search.py" ] && cp "ciadpi_strategy_search.py" "$HOME/.local/bin/"
+        [ -f "ciadpi_i18n.py" ] && cp "ciadpi_i18n.py" "$HOME/.local/bin/"          # Локализация RU/EN
+        [ -f "ciadpi_params_spec.py" ] && cp "ciadpi_params_spec.py" "$HOME/.local/bin/"  # Конструктор параметров
         
     else
         # УДАЛЕННАЯ установка - скачиваем с GitHub
@@ -293,6 +295,8 @@ install_python_scripts() {
         wget -q -O "$HOME/.local/bin/ciadpi_param_generator.py" "$BASE_URL/ciadpi_param_generator.py" 2>/dev/null || warn "Param generator script not available"
         wget -q -O "$HOME/.local/bin/ciadpi_whitelist.py" "$BASE_URL/ciadpi_whitelist.py" 2>/dev/null || warn "Whitelist script not available"  # ДОБАВЛЕНО
         wget -q -O "$HOME/.local/bin/ciadpi_strategy_search.py" "$BASE_URL/ciadpi_strategy_search.py" 2>/dev/null || warn "Strategy search script not available"
+        wget -q -O "$HOME/.local/bin/ciadpi_i18n.py" "$BASE_URL/ciadpi_i18n.py" 2>/dev/null || warn "i18n module not available"
+        wget -q -O "$HOME/.local/bin/ciadpi_params_spec.py" "$BASE_URL/ciadpi_params_spec.py" 2>/dev/null || warn "Params spec module not available"
     fi
     
     log "Python scripts installed to ~/.local/bin/"

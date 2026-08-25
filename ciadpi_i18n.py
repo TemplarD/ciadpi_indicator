@@ -188,7 +188,21 @@ _STRINGS = {
                            'en': '❌ Automatically disable proxy on exit'},
     'proxy.auto_disable_h': {'ru': 'При остановке сервиса прокси будет автоматически отключен в системе',
                              'en': 'Proxy will be disabled system-wide when the service stops'},
+    # ---- Дополнительные ключи (v1.5) ----
+    'notif.command_ok':   {'ru': 'Команда выполнена', 'en': 'Command completed'},
+    'notif.service_started_proxy': {'ru': 'Сервис запущен, настройки прокси применены',
+                                    'en': 'Service started, proxy settings applied'},
+    'settings.dialog_title': {'ru': 'Настройки параметров CIADPI', 'en': 'CIADPI Parameter Settings'},
+    'settings.params_label': {'ru': 'Параметры запуска CIADPI:', 'en': 'CIADPI launch parameters:'},
+    'settings.examples':  {'ru': 'Примеры параметров (кликните для копирования):',
+                           'en': 'Parameter examples (click to copy):'},
+    'settings.hint':      {'ru': '💡 Параметры проверяются автоматически при сохранении',
+                           'en': '💡 Parameters are validated automatically on save'},
+    'settings.validation_error': {'ru': 'Ошибка в параметрах:', 'en': 'Parameter error:'},
+    'builder.help_section': {'ru': 'Раздел:', 'en': 'Section:'},
+
 }
+
 
 _current = None
 
@@ -198,6 +212,7 @@ def _load_choice():
     if _current is not None:
         return _current
     try:
+        _LANG_FILE.parent.mkdir(parents=True, exist_ok=True)
         _current = _LANG_FILE.read_text().strip()
     except Exception:
         pass

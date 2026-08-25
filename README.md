@@ -19,7 +19,7 @@ Complete DPI bypass solution with system tray indicator. Includes byedpi and man
 - 🧪 **Strategy Search** - Brute-force search of optimal bypass parameters
 - ⬆️ **byedpi Update** - Update the core without reinstalling
 - 🔌 **Proxy modes** - System-wide, PAC, or **Local-only** mode that never touches system proxy settings (point specific apps at the port yourself)
-- 🚀 **Auto-Start** - Starts with system
+- 🚀 **Auto-Start** - Optional; the indicator can start with the system, but **never starts the service by itself** — service autostart is managed separately via systemd (`sudo systemctl enable/disable ciadpi.service`)
 
 #### Supported Systems
 
@@ -240,7 +240,9 @@ ciadpi_indicator/
 ├── README.md
 ├── LICENSE
 ├── ciadpi_advanced_tray.py      # tray indicator (GTK3/AppIndicator)
-├── ciadpi_strategy_search.py    # brute-force strategy search (new)
+├── ciadpi_strategy_search.py    # brute-force strategy search
+├── ciadpi_i18n.py               # RU/EN localization
+├── ciadpi_params_spec.py        # parameter definitions for the builder
 ├── ciadpi_autosearch.py
 ├── ciadpi_param_generator.py
 ├── ciadpi_whitelist.py

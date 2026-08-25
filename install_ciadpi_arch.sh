@@ -261,6 +261,8 @@ main() {
     INDICATOR_FILES=(
         "ciadpi_advanced_tray.py"
         "ciadpi_strategy_search.py"
+        "ciadpi_i18n.py"
+        "ciadpi_params_spec.py"
         "ciadpi_autosearch.py"
         "ciadpi_param_generator.py"
         "ciadpi_whitelist.py"
