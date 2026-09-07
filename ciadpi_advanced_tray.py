@@ -108,7 +108,7 @@ class AdvancedTrayIndicator:
         self.app = 'ciadpi_advanced_indicator'
         self.config_file = Path.home() / '.config' / 'ciadpi' / 'config.json'
         self.service_file = Path('/etc/systemd/system/ciadpi.service')
-        self.default_params = "-o1 -o25+s -T3 -At o--tlsrec 1+s"
+        self.default_params = "-T3 -A torst -o1 -o25+s -r 1+s"
         self.current_params = self.load_config()
         self.whitelist_file = Path.home() / '.config' / 'ciadpi' / 'whitelist.json'
         self.whitelist = self.load_whitelist()
@@ -513,10 +513,59 @@ class AdvancedTrayIndicator:
             return False, "Таймаут выполнения"
 
 
+    def _dry_run_params(self, params: str) -> Tuple[bool, str]:
+        """Проверка параметров живым бинарником ciadpi без запуска прокси.
+
+        Запускает ciadpi с параметрами на привилегированном порту (-p 1):
+        - если парсер параметров отверг значения — получим 'invalid value: -X ...'
+          (rc=254) ДО попытки bind — это и есть невалидные параметры;
+        - если значения корректны, bind на порт 1 упадёт с
+          'bind: Permission denied' (rc=255) — для нас это успех:
+          синтаксис принят, сеть не тронута.
+        VPN и рабочий прокси не затрагиваются.
+        """
+        binary = self._locate_ciadpi()[1]
+        if not binary:
+            return True, ""  # бинарника нет — не блокируем сохранение в конфиг
+        try:
+            cmd = [str(binary)] + params.split() + ['-i', '127.0.0.1', '-p', '1']
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            err = (r.stderr or r.stdout).strip()
+            first_line = err.splitlines()[0] if err else ""
+            # Парсер отверг параметры ДО bind — это ошибка значений
+            if 'invalid value' in first_line.lower() \
+                    or 'unknown option' in first_line.lower() \
+                    or 'usage' in first_line.lower():
+                return False, first_line
+            # bind: Permission denied = параметры приняты, порт занят правами
+            if 'permission denied' in first_line.lower():
+                return True, ""
+            # что-то другое упало — не блокируем, но и не молчим
+            if r.returncode not in (0,):
+                print(f"⚠️ dry-run неожиданный результат rc={r.returncode}: {first_line}")
+            return True, ""
+        except Exception as e:
+            return True, f"(проверка пропущена: {e})"
+
     def update_service_params(self, new_params, apply_proxy=True):
         """Обновление параметров в systemd сервисе - УНИВЕРСАЛЬНАЯ ВЕРСИЯ"""
         try:
             print(f"🔄 Обновление параметров: {new_params}")
+
+            # ⭐ PRE-FLIGHT: синтаксис + живой бинарник, ДО записи в юнит.
+            # Невалидные параметры = вечный crash-loop юнита (Restart=on-failure).
+            valid, err_msg = self.validate_params(new_params)
+            if not valid:
+                self.show_notification(t('notif.error'),
+                                       err_msg.split('\n')[0], category='params')
+                return False
+            ok, bin_err = self._dry_run_params(new_params)
+            if not ok:
+                self.show_notification(
+                    t('notif.error'),
+                    f"ciadpi отверг параметры: {bin_err}", category='params')
+                print(f"❌ dry-run: {bin_err}")
+                return False
 
             # Получаем данные пользователя динамически
             username = os.environ.get('USER')
@@ -1105,14 +1154,21 @@ class AdvancedTrayIndicator:
     
 
     def show_proxy_settings(self, widget=None):
-        """Диалог настроек прокси"""
-        # Сначала получаем текущие системные настройки
+        """Диалог настроек прокси.
+
+        Поля заполняются из НАШЕГО конфига (proxy_host/proxy_port/proxy_mode),
+        а не из gsettings — иначе в local-режиме системные настройки пусты
+        и выглядит, будто ничего не задано. Статус-блок показывает:
+        сохранённый режим, хост:порт из конфига, текущее системное состояние
+        и флаг мы_меняли_систему.
+        """
+        # Текущие системные настройки — только для статуса
         current_settings = self.get_system_proxy_settings()
-        
-        dialog = Gtk.Dialog(title="Настройки системного прокси", flags=0)
+
+        dialog = Gtk.Dialog(title=t('proxy.title'), flags=0)
         dialog.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
                         Gtk.STOCK_OK, Gtk.ResponseType.OK)
-        dialog.set_default_size(500, 350)
+        dialog.set_default_size(500, 420)
 
         content_area = dialog.get_content_area()
         
@@ -1131,20 +1187,24 @@ class AdvancedTrayIndicator:
         mode_combo.append_text(t('proxy.mode_off'))     # 2 none
         mode_combo.append_text(t('proxy.mode_local'))   # 3 local
 
-        # Устанавливаем текущий режим (local из конфига имеет приоритет)
-        if self.current_params.get('proxy_mode') == 'local':
+        # ⭐ Режим берём ИЗ КОНФИГА (что пользователь задал последним),
+        # а не из gsettings
+        saved_mode = self.current_params.get('proxy_mode', 'none') or 'none'
+        if saved_mode == 'auto':
+            mode_combo.set_active(0)
+        elif saved_mode == 'manual':
+            mode_combo.set_active(1)
+        elif saved_mode == 'local':
             mode_combo.set_active(3)
         else:
-            current_mode = current_settings.get('mode', 'none')
-            if current_mode == 'auto':
-                mode_combo.set_active(0)
-            elif current_mode == 'manual':
-                mode_combo.set_active(1)
-            else:
-                mode_combo.set_active(2)
-        
+            mode_combo.set_active(2)
+
+        # ⭐ Хост и порт — из конфига; пусто только если юзер не задал
+        saved_host = self.current_params.get('proxy_host', '')
+        saved_port = str(self.current_params.get('proxy_port', '1080') or '1080')
+
         # Настройки ручного прокси
-        manual_frame = Gtk.Frame(label="Ручные настройки прокси")
+        manual_frame = Gtk.Frame(label=t('proxy.manual_frame'))
         manual_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
         manual_box.set_margin_top(5)
         manual_box.set_margin_bottom(5)
@@ -1152,22 +1212,22 @@ class AdvancedTrayIndicator:
         manual_box.set_margin_end(5)
         
         # Хост
-        host_label = Gtk.Label(label="Хост прокси (оставьте ПУСТЫМ для использования только порта):")
+        host_label = Gtk.Label(label=t('proxy.host'))
+        host_label.set_xalign(0)
         host_entry = Gtk.Entry()
-        host_entry.set_placeholder_text("ПУСТОЕ значение - только порт")
-        current_host = current_settings.get('http_host', '')
-        # Показываем именно то, что сохранено (может быть пустой строкой)
-        host_entry.set_text(current_host)
+        host_entry.set_placeholder_text(t('proxy.host_ph'))
+        host_entry.set_text(saved_host)
         
         # Порт
-        port_label = Gtk.Label(label="Порт прокси:")
+        port_label = Gtk.Label(label=t('proxy.port'))
+        port_label.set_xalign(0)
         port_entry = Gtk.Entry()
-        port_entry.set_text(current_settings.get('http_port', '1080'))
+        port_entry.set_text(saved_port)
         
         # Примеры форматов
-        examples_label = Gtk.Label(label="Важно:\n• Пустое поле хоста = только порт\n• 127.0.0.1 = хост + порт")
+        examples_label = Gtk.Label(label=t('proxy.host_ph'))
         examples_label.set_sensitive(False)
-        
+
         manual_box.pack_start(host_label, False, False, 0)
         manual_box.pack_start(host_entry, False, False, 0)
         manual_box.pack_start(port_label, False, False, 0)
@@ -1178,6 +1238,7 @@ class AdvancedTrayIndicator:
         # Информация
         info_label = Gtk.Label(label=t('proxy.note_all'))
         info_label.set_sensitive(False)
+        info_label.set_xalign(0)
 
         # Подсказка для локального режима (видна при выборе "Локальный")
         local_hint_label = Gtk.Label(label=t('proxy.local_hint'))
@@ -1185,16 +1246,43 @@ class AdvancedTrayIndicator:
         local_hint_label.set_xalign(0)
         local_hint_label.set_line_wrap(True)
         
-        # Текущий статус
-        current_host_display = "ПУСТОЙ (только порт)" if not current_settings.get('http_host') else current_settings.get('http_host')
-        current_port_display = current_settings.get('http_port', 'не указан')
-        status_label = Gtk.Label(label=f"Текущий режим: {current_settings.get('mode', 'неизвестно')}\nХост: {current_host_display}, Порт: {current_port_display}")
-        status_label.set_sensitive(False)
+        # ⭐ ЖИВОЙ СТАТУС: что задано в конфиге + что в системе сейчас
+        mode_names = {
+            'auto': t('proxy.mode_pac'), 'manual': t('proxy.mode_manual'),
+            'none': t('proxy.mode_off'), 'local': t('proxy.mode_local'),
+        }
+        cfg_mode_name = mode_names.get(saved_mode, saved_mode or '—')
+        cfg_host_disp = saved_host if saved_host else '127.0.0.1'
+        sys_mode = current_settings.get('mode', 'none')
+        sys_mode_name = mode_names.get(sys_mode, sys_mode or '—')
+        sys_host = current_settings.get('http_host', '')
+        sys_port = current_settings.get('http_port', '')
+
+        status_lines = [
+            f"💾 {t('proxy.saved_state')}: {cfg_mode_name}  →  {cfg_host_disp}:{saved_port}",
+        ]
+        if saved_mode == 'local':
+            status_lines.append(f"🖥️ {t('proxy.system_now')}: {sys_mode_name}"
+                                + (f" ({sys_host}:{sys_port})" if sys_mode == 'manual' else ""))
+            status_lines.append(t('proxy.local_active'))
+        elif saved_mode == 'manual':
+            if sys_mode == 'manual' and sys_host == saved_host \
+                    and sys_port == saved_port:
+                status_lines.append("✅ " + t('proxy.applied_ok'))
+            else:
+                status_lines.append("⚠️ " + t('proxy.not_applied'))
+        elif saved_mode == 'none':
+            status_lines.append("✅ " + t('proxy.applied_ok'))
+
+        status_label = Gtk.Label(label="\n".join(status_lines))
+        status_label.set_xalign(0)
+        status_label.set_line_wrap(True)
+        status_label.get_style_context().add_class('dim-label')
 
         # ЧЕКБОКС для автоматического отключения прокси
-        auto_disable_check = Gtk.CheckButton(label="❌ Автоматически отключать прокси при выходе")
+        auto_disable_check = Gtk.CheckButton(label=t('proxy.auto_disable'))
         auto_disable_check.set_active(self.current_params.get("auto_disable_proxy", False))
-        auto_disable_check.set_tooltip_text("При остановке сервиса прокси будет автоматически отключен в системе")
+        auto_disable_check.set_tooltip_text(t('proxy.auto_disable_h'))
                 
         # Добавляем в UI
         box.pack_start(auto_disable_check, False, False, 0)
@@ -1258,18 +1346,20 @@ class AdvancedTrayIndicator:
             # системные настройки мы не трогали
 
             # ⭐ ЛОГИКА УПРАВЛЕНИЯ ПРОКСИ (ВСЕ В ОДНОМ МЕСТЕ)
+            restored_original = False
             if selected_mode == 'manual' and not self.we_changed_proxy:
                 # ВКЛЮЧАЕМ ПРОКСИ ВПЕРВЫЕ
                 self.save_system_proxy_backup()
                 self.we_changed_proxy = True
                 print("💾 Включен наш прокси, сохранены системные настройки")
-                
+            
             elif selected_mode == 'none' and self.we_changed_proxy:
-                # ОТКЛЮЧАЕМ ПРОКСИ
+                # ОТКЛЮЧАЕМ ПРОКСИ — восстанавливаем оригинал
                 self.restore_system_proxy_backup()
                 self.we_changed_proxy = False
+                restored_original = True
                 print("💾 Прокси отключен, восстановлены системные настройки")
-            
+        
             # ⭐ СОХРАНЕНИЕ В КОНФИГ (ВСЕГО ОДИН РАЗ)
             self.current_params["proxy_enabled"] = selected_mode != 'none'
             self.current_params["proxy_host"] = proxy_host
@@ -1277,17 +1367,34 @@ class AdvancedTrayIndicator:
             self.current_params["proxy_mode"] = selected_mode
             self.current_params["auto_disable_proxy"] = auto_disable_check.get_active()
             self.current_params["we_changed_proxy"] = self.we_changed_proxy
-            
+        
             print(f"💾 Сохраняем конфиг: auto_disable_proxy={self.current_params['auto_disable_proxy']}, we_changed_proxy={self.we_changed_proxy}")
             self.save_config()
-            
-            # ⭐ ПРИМЕНЕНИЕ НАСТРОЕК (ЕСЛИ НЕ БЫЛО ВОССТАНОВЛЕНИЯ)
-            if not (selected_mode == 'none' and self.we_changed_proxy):
-                # Просто применяем настройки (если не восстанавливали системные)
-                success = self.apply_system_proxy(selected_mode, proxy_host, proxy_port)
-            
-            display_host = "ПУСТОЙ" if not proxy_host else proxy_host
-            self.show_notification("Прокси", f"Прокси {selected_mode} применен")
+        
+            # ⭐ ПРИМЕНЕНИЕ НАСТРОЕК
+            # Если только что восстановили оригинал — НЕ применяем ничего
+            # поверх (иначе затрём восстановленные настройки пользователя).
+            # Во всех остальных случаях применяем выбранный режим к системе.
+            apply_result = None
+            if not restored_original:
+                apply_result = self.apply_system_proxy(
+                    selected_mode if selected_mode in ('manual', 'auto', 'none')
+                    else 'none',
+                    proxy_host, proxy_port)
+
+            # ⭐ УВЕДОМЛЕНИЕ С РЕАЛЬНЫМ РЕЗУЛЬТАТОМ
+            if restored_original:
+                self.show_notification(t('notif.proxy_applied'),
+                                       t('proxy.restored_original'), category='proxy')
+            elif apply_result:
+                self.show_notification(
+                    t('notif.proxy_applied'),
+                    f"{mode_names.get(selected_mode, selected_mode)} → "
+                    f"{proxy_host or '127.0.0.1'}:{proxy_port}",
+                    category='proxy')
+            else:
+                self.show_notification(t('notif.error'),
+                                       t('proxy.apply_failed'), category='proxy')
 
         dialog.destroy()
 
@@ -1489,44 +1596,38 @@ class AdvancedTrayIndicator:
     def check_current_proxy(self):
         """Проверка текущих системных настроек прокси.
 
-        ⭐ В локальном режиме ('local') НЕ перезаписываем наш конфиг
-        системным состоянием — иначе локальные настройки теряются."""
+        ⭐ ЭТО МОНИТОР, А НЕ СИНХРОНИЗАТОР: конфиг пользователя —
+        источник правды. Системное состояние НЕ перезаписывает
+        proxy_host/proxy_port/proxy_mode из конфига (это делало
+        «прокси потерялся» каждые 5 секунд). Локальный режим вообще
+        не смотрит в систему.
+        """
         try:
             # Локальный режим: системный прокси нас не интересует
             if self.current_params.get('proxy_mode') == 'local':
                 return
 
-            # Проверяем настройки GNOME
+            # Только читаем состояние для внутреннего использования
+            # (уведомления отслеживания изменений — без записи в конфиг).
             result = subprocess.run([
                 'gsettings', 'get', 'org.gnome.system.proxy', 'mode'
             ], capture_output=True, text=True, check=False)
-            
+
             if result.returncode == 0:
                 mode = result.stdout.strip().strip("'")
                 if mode == 'manual':
-                    # Получаем настройки HTTP прокси
                     host_result = subprocess.run([
                         'gsettings', 'get', 'org.gnome.system.proxy.http', 'host'
                     ], capture_output=True, text=True, check=False)
                     port_result = subprocess.run([
                         'gsettings', 'get', 'org.gnome.system.proxy.http', 'port'
                     ], capture_output=True, text=True, check=False)
-                    
                     host = host_result.stdout.strip().strip("'")
                     port = port_result.stdout.strip()
-                    
-                    # Обновляем конфиг
-                    self.current_params["proxy_enabled"] = True
-                    self.current_params["proxy_host"] = host
-                    self.current_params["proxy_port"] = port
-                    self.save_config()
-                    
-                    print(f"📡 Текущие настройки прокси: {host}:{port}")
+                    print(f"📡 Системный прокси: manual {host}:{port} (конфиг не трогаем)")
                 else:
-                    self.current_params["proxy_enabled"] = False
-                    self.save_config()
-                    print("📡 Прокси отключен в системе")
-                    
+                    print(f"📡 Системный прокси: {mode} (конфиг не трогаем)")
+
         except Exception as e:
             print(f"❌ Ошибка проверки настроек прокси: {e}")
 
@@ -1570,8 +1671,11 @@ class AdvancedTrayIndicator:
     def restore_our_proxy_on_startup(self):
         """Восстанавливаем наши настройки прокси при запуске приложения.
 
-        Ничего не запускает автоматически: только синхронизирует флаг
-        прокси, ЕСЛИ сервис уже работает. Автостарт сервиса отключён."""
+        Ничего не запускает автоматически: только синхронизирует прокси,
+        ЕСЛИ сервис уже работает. Автостарт сервиса отключён.
+        ⭐ Флаг we_changed_proxy ставим только если реально применили
+        настройки к системе (иначе «Выход» откатывал чужие настройки).
+        """
         try:
             # Проверяем статус сервиса
             result = subprocess.run(
@@ -1583,6 +1687,8 @@ class AdvancedTrayIndicator:
             # Если сервис НЕ запущен — ничего не делаем (никакого автостарта)
             if not service_running:
                 print("ℹ️ Сервис не запущен — автостарт не выполняется (ручной режим)")
+                # ⭐ НО: если в конфиге manual и прошлый раз мы применяли прокси,
+                # флаг остаётся как есть — решает exit_app при остановке сервиса.
                 return False
 
             # Если сервис запущен И у нас есть настройки прокси - восстанавливаем
@@ -1593,26 +1699,27 @@ class AdvancedTrayIndicator:
                 print("🔄 Восстанавливаем наши настройки прокси при запуске...")
                 print(f"🔍 Флаг we_changed_proxy: {self.we_changed_proxy}")
                 
-                # ⭐ ВОССТАНАВЛИВАЕМ ФЛАГ ЕСЛИ ОН БЫЛ УСТАНОВЛЕН
-                if not self.we_changed_proxy:
-                    self.we_changed_proxy = True
-                    self.save_config()
-                    print("💾 Флаг we_changed_proxy восстановлен и сохранен")
-                
                 host = self.current_params.get("proxy_host", "")
                 port = self.current_params.get("proxy_port", "1080")
                 
                 success = self.apply_system_proxy('manual', host, port)
-                
+
                 if success:
+                    # ⭐ ФЛАГ СТАВИМ ТОЛЬКО ПОСЛЕ РЕАЛЬНОГО ПРИМЕНЕНИЯ,
+                    # с сохранением бэкапа исходных системных настроек
+                    if not self.we_changed_proxy:
+                        self.save_system_proxy_backup()
+                        self.we_changed_proxy = True
+                        self.save_config()
+                        print("💾 Флаг we_changed_proxy установлен после применения прокси")
                     print("✅ Наши настройки прокси восстановлены при запуске")
                 else:
                     print("❌ Не удалось восстановить настройки при запуске")
-                    
+                
         except Exception as e:
             print(f"⚠️ Ошибка восстановления настроек при запуске: {e}")
         
-        return False  
+        return False
 
     # Восстановление системных настроек
     def restore_system_proxy_backup(self):
@@ -1677,41 +1784,41 @@ class AdvancedTrayIndicator:
         """Запуск сервиса с восстановлением наших настроек"""
         def start_with_proxy_restore():
             try:
-                # Запускаем сервис
-                result = subprocess.run(
-                    ['sudo', 'systemctl', 'start', 'ciadpi.service'],
-                    capture_output=True, text=True, timeout=10
-                )
-                
-                if result.returncode == 0:
+                # Запускаем сервис через универсальный _systemctl
+                # (sudoers/polkit fallback-цепочка, без пароля после настройки)
+                ok, err = self._systemctl('start', 'ciadpi.service')
+
+                if ok:
                     # После запуска сервиса восстанавливаем НАШИ настройки
                     time.sleep(2)
-                    
+
                     if (self.current_params.get("proxy_enabled", False) and 
                         self.current_params.get("proxy_mode") == 'manual'):
-                        
+
                         # ВОССТАНАВЛИВАЕМ ФЛАГ если у нас есть настройки прокси
                         if not self.we_changed_proxy:
                             self.save_system_proxy_backup()
                             self.we_changed_proxy = True
                             self.save_config()  # ⭐ СОХРАНЯЕМ КОНФИГ С ФЛАГОМ
                             print("💾 Флаг we_changed_proxy сохранен в конфиг")
-                        
+
                         host = self.current_params.get("proxy_host", "")
                         port = self.current_params.get("proxy_port", "1080")
                         self.apply_system_proxy('manual', host, port)
                         self.show_notification(t('notif.success'), t('notif.service_started_proxy'), category='service')
                     else:
                         self.show_notification(t('notif.success'), t('notif.service_started'), category='service')
-                        
+
+                    time.sleep(1)
+                    self.update_status()
+
                 else:
-                    self.show_notification("Ошибка", result.stderr)
-                    
-                time.sleep(1)
-                self.update_status()
-                
+                    self.show_notification(t('notif.error'),
+                                           err or "systemctl start failed",
+                                           category='service')
+
             except Exception as e:
-                self.show_notification("Ошибка", str(e))
+                self.show_notification(t('notif.error'), str(e), category='service')
         
         threading.Thread(target=start_with_proxy_restore, daemon=True).start()
 
@@ -1732,21 +1839,20 @@ class AdvancedTrayIndicator:
                         print("💾 Флаг we_changed_proxy сброшен после восстановления системных настроек")
                     
                     # Останавливаем сервис
-                    result = subprocess.run(
-                        ['sudo', 'systemctl', 'stop', 'ciadpi.service'],
-                        capture_output=True, text=True, timeout=10
-                    )
+                    ok, err = self._systemctl('stop', 'ciadpi.service')
                     
-                    if result.returncode == 0:
+                    if ok:
                         self.show_notification(t('notif.service_stopped'), t('proxy.mode_off'), category='service')
                     else:
-                        self.show_notification("Ошибка", result.stderr)
-                        
+                        self.show_notification(t('notif.error'),
+                                               err or "systemctl stop failed",
+                                               category='service')
+                    
                     time.sleep(1)
                     self.update_status()
                     
                 except Exception as e:
-                    self.show_notification("Ошибка", str(e))
+                    self.show_notification(t('notif.error'), str(e), category='service')
             
             threading.Thread(target=stop_with_proxy_restore, daemon=True).start()
         else:
@@ -1756,28 +1862,52 @@ class AdvancedTrayIndicator:
     def restart_service(self, widget):
         self.run_command("systemctl restart ciadpi.service")
 
+    # ---------------- Валидация значений ciadpi ----------------
+    # Позиция desync: -?[смещение][:повторы][:шаг] с флагами +s/+h/+n (+e/m/r/s вторым)
+    OFFSET_VAL = r'-?\d+(:\d+)?(:\d+)?(\+[shn][emrs]?)?'
+    # -L: буквы s,o,n через запятую (0..3 в старых версиях больше не принимаются)
+    VAL_PATTERNS = {
+        '-L': r'[son](,[son])*',
+        # -A: значим первый символ (t,r,s,c,n,p=)
+        '-A': r'[trscnp].*',
+        '-K': r'[thui](,[thui])*',
+        '-M': r'[hdr](,[hdr])*',
+        '-Q': r'([ro](,[ro])*|msize=\d+)',
+        '-V': r'\d+(-\d+)?',
+        '-R': r'\d+(-\d+)?',
+        '-T': r'\d+(\.\d+)?(:\d+(\.\d+)?){0,3}',
+        '-s': OFFSET_VAL, '-d': OFFSET_VAL, '-o': OFFSET_VAL,
+        '-q': OFFSET_VAL, '-f': OFFSET_VAL, '-r': OFFSET_VAL,
+        '-O': OFFSET_VAL,
+        '-g': r'\d+', '-t': r'\d+', '-m': r'\d+',
+        '-p': r'\d+', '-c': r'\d+', '-b': r'\d+',
+        '-u': r'\d+', '-a': r'\d+', '-x': r'\d+',
+        '-i': r'[a-zA-Z0-9.:]+', '-I': r'[a-zA-Z0-9.:]+',
+        '-V': r'\d+(-\d+)?',
+    }
+    # Флаги, значение которых может начинаться с '-' (позиции: -f -1 из README byedpi)
+    OFFSET_FLAGS = {'-s', '-d', '-o', '-q', '-f', '-r', '-O'}
+
+    def _valid_flag_value(self, flag: str, val: str) -> bool:
+        """Проверка значения по правилам текущего бинарника ciadpi."""
+        pat = self.VAL_PATTERNS.get(flag)
+        if pat is None:
+            return True  # свободное значение (-n, -l, -H, -j, -e, -w, -y...)
+        return re.fullmatch(pat, val) is not None
+
     def validate_params(self, params: str) -> Tuple[bool, str]:
-        """Проверка параметров ciadpi с детальными сообщениями об ошибках"""
+        """Проверка параметров ciadpi с детальными сообщениями об ошибках.
+
+        Синхронизирована с парсером текущего byedpi (main.c):
+        - суффикс позиций: после + ОБЯЗАТЕЛЕН флаг s/h/n, затем опц. e/m/r/s;
+        - -L принимает только буквы s, o, n (запятые допустимы);
+        - -A значим первым символом (t, r, s, c, n, p=).
+        """
         if not params.strip():
             return True, ""
 
-        # Флаги без значения
         bool_flags = {'-D', '-E', '-N', '-U', '-F', '-S', '-Y'}
 
-        # Флаги, принимающие значение (отдельным токеном или прикреплённо: -T3)
-        val_flags = {'-i', '-p', '-w', '-c', '-I', '-b', '-g', '-T', '-A', '-L',
-                     '-u', '-y', '-K', '-H', '-j', '-V', '-R', '-s', '-d', '-o',
-                     '-q', '-f', '-r', '-t', '-O', '-l', '-e', '-n', '-Q', '-M',
-                     '-a', '-x'}
-
-        known_short = bool_flags | val_flags
-
-        # Методы обхода с суффиксами: -o1, -o25+s, -o10+m и т.п.
-        obfuscation_re = re.compile(r'^-o\d+([+][a-z]+)*$')
-        # Прикреплённые значения-суффиксы: 1+s, 2+m ...
-        suffix_value_re = re.compile(r'^\d+([+][a-z]+)?$')
-
-        # Длинные опции из справки ciadpi -h
         known_long = {'--ip', '--port', '--daemon', '--pidfile', '--transparent',
                       '--max-conn', '--no-domain', '--no-udp', '--conn-ip',
                       '--buf-size', '--debug', '--def-ttl', '--tfo', '--timeout',
@@ -1794,54 +1924,79 @@ class AdvancedTrayIndicator:
         while i < len(tokens):
             tok = tokens[i]
 
-            # специальные формы ciadpi
+            # легаси-мусор из старых версий (позиционные слова, парсер игнорирует)
             if tok == 'o--tlsrec' or tok.startswith('o--'):
                 i += 1
                 continue
-            if suffix_value_re.match(tok):
+            # голое значение-позиция (1+s, 2+s после легаси-слов)
+            if re.match(r'^-?\d+(:\d+)?(:\d+)?(\+[shn][emrs]?)?$', tok):
+                i += 1
+                continue
+            # значения флагов со свободными строками (-H, -j, -l, -n, -e, -A ...)
+            if i > 0 and tokens[i - 1] in ('-H', '-j', '-l', '-n', '-e', '-A',
+                                           '--hosts', '--ipset', '--fake-data',
+                                           '--fake-sni', '--oob-data', '--auto'):
                 i += 1
                 continue
 
-            if tok in known_short:
-                # флаг со значением отдельным токеном?
-                if tok in val_flags and i + 1 < len(tokens) \
-                        and not tokens[i + 1].startswith('-'):
-                    i += 2  # пропускаем флаг и его значение
-                else:
-                    i += 1
-                continue
-
-            if tok in known_long:
-                # длинная опция со значением?
-                if i + 1 < len(tokens) and not tokens[i + 1].startswith('-'):
-                    # --tlsrec и --split могут быть без значения в спецформах,
-                    # но обычно со значением; пропускаем значение
-                    i += 2
-                else:
-                    i += 1
-                continue
-
-            if tok.startswith('--'):
-                # неизвестная длинная опция — ошибка
-                unknown.append(tok)
+            if tok in bool_flags:
                 i += 1
                 continue
 
-            if tok.startswith('-'):
-                # прикреплённое значение: -T3, -L1, -R2 ...
-                if tok[:2] in known_short or obfuscation_re.match(tok):
+            # длинная опция со значением через = (--auto=torst, --tlsrec=1+s)
+            if tok.startswith('--') and '=' in tok:
+                opt_name = tok.split('=', 1)[0]
+                if opt_name in known_long:
                     i += 1
                     continue
                 unknown.append(tok)
                 i += 1
                 continue
 
-            # голое значение (torst, ssl_err, имя хоста...) — продолжение значения
+            # прикреплённое значение: -T3, -At, -o25+s, -Ls
+            m = re.match(r'^(-[A-Za-z])(.+)$', tok)
+            if m and m.group(1) not in bool_flags:
+                flag, val = m.group(1), m.group(2)
+                if flag == '-o' and re.match(r'^\d+$', val):
+                    pass  # -oN (числовой метод) = позиция, проверим ниже
+                if not self._valid_flag_value(flag, val):
+                    unknown.append(tok)
+                i += 1
+                continue
+
+            # отдельный флаг + значение следующим токеном
+            if tok in self.VAL_PATTERNS or tok in ('-w', '-y', '-H', '-j', '-l',
+                                                  '-n', '-e', '-C', '-P', '-W'):
+                nxt = tokens[i + 1] if i + 1 < len(tokens) else None
+                if nxt is None or (nxt.startswith('-') and tok not in self.OFFSET_FLAGS):
+                    unknown.append(f"{tok} (нет значения)")
+                    i += 1
+                    continue
+                if not self._valid_flag_value(tok, nxt):
+                    unknown.append(f"{tok} {nxt}")
+                i += 2
+                continue
+
+            if tok in known_long:
+                if i + 1 < len(tokens) and not tokens[i + 1].startswith('-'):
+                    i += 2
+                else:
+                    i += 1
+                continue
+
+            if tok.startswith('-'):
+                unknown.append(tok)
+                i += 1
+                continue
+
+            # прочее голое значение — продолжение значения предыдущего флага
             i += 1
 
         if unknown:
-            error_msg = f"Неизвестные параметры: {', '.join(unknown)}\n"
-            error_msg += "Используйте только параметры из документации ciadpi"
+            error_msg = f"Недопустимые параметры: {', '.join(unknown)}\n"
+            error_msg += ("Правила: после + в позициях обязателен флаг s/h/n "
+                          "(+m/+e только вторым); -L принимает s/o/n; "
+                          "проверьте документацию ciadpi")
             return False, error_msg
 
         return True, ""
@@ -1888,13 +2043,13 @@ class AdvancedTrayIndicator:
             examples_title.set_xalign(0)
             examples_box.pack_start(examples_title, False, False, 0)
             
-            # Список примеров
+            # Список примеров (проверены на текущем бинарнике byedpi)
             examples = [
-                "-o1 -o25+s -T3 -At o--tlsrec 1+s",
-                "-o2 -o15+s -T2 -At o--tlsrec", 
-                "-o1 -o5+s -T1 -At",
-                "-o3 -o20+s -T3 -At o--tlsrec 2+s",
-                "-o4 -o10+m -T5 -A torst -L 1"
+                "-T3 -A torst -o1 -o25+s -r 1+s",
+                "-T2 -A torst -o2 -o15+s -r 2+s",
+                "-T1 -A torst -o1 -o5+s",
+                "-T3 -A torst -o3 -o20+s -r 2+s",
+                "-T5 -A torst -o4 -o10+s"
             ]
             
             for example in examples:

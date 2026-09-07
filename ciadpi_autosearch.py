@@ -8,22 +8,36 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
+try:
+    from ciadpi_whitelist import WhitelistManager
+    WHITELIST_AVAILABLE = True
+except ImportError:
+    WHITELIST_AVAILABLE = False
+    WhitelistManager = None
+
 class CIAutoSearch:
     def __init__(self):
         self.history_file = Path.home() / '.config' / 'ciadpi' / 'history' / 'test_history.json'
         self.ciadpi_path = Path.home() / 'byedpi' / 'ciadpi'
         self.test_urls = [
             "https://www.youtube.com",
-            "https://www.google.com",
+            "https://www.google.com/generate_204",
             "https://github.com",
             "https://www.wikipedia.org"
         ]
         self.current_test_url = 0
         self.is_searching = False
         self.current_process = None
-        self.whitelist_manager = WhitelistManager()
+        # Тестовый порт для локального инстанса (не конфликтует со службой)
+        self.test_port = 1081
+        self.whitelist_manager = WhitelistManager() if WHITELIST_AVAILABLE else None
         
         # Настройка логирования
+        try:
+            self.config_dir = Path.home() / '.config' / 'ciadpi'
+            self.config_dir.mkdir(exist_ok=True)
+        except Exception:
+            self.config_dir = Path.home()
         logging.basicConfig(
             level=logging.INFO,
             format='%(asctime)s - %(levelname)s - %(message)s',
@@ -79,79 +93,106 @@ class CIAutoSearch:
         self.save_history()
 
     def test_connection(self, timeout=10):
-        """Тестирование соединения с YouTube"""
-        try:
-            test_url = self.test_urls[self.current_test_url]
-            self.current_test_url = (self.current_test_url + 1) % len(self.test_urls)
+        """Тестирование соединения через локальный SOCKS5-прокси ciadpi.
 
+        ciadpi — SOCKS-прокси, поэтому curl -x socks5h:// (не http://!).
+        Возвращает (success, speed, test_url).
+        """
+        test_url = "https://www.google.com/generate_204"
+        try:
             # Пропускаем тестирование если URL в белом списке
-            if hasattr(self, 'whitelist_manager') and self.whitelist_manager.is_whitelisted(test_url):
-                return True, 0.1, test_url  # Быстрый успех для белого списка
+            if self.whitelist_manager is not None and \
+                    self.whitelist_manager.is_whitelisted(test_url):
+                return True, 0.1, test_url
 
             start_time = time.time()
             result = subprocess.run([
                 'curl', '-s', '-o', '/dev/null', '-w', '%{http_code}',
+                '-x', f'socks5h://127.0.0.1:{self.test_port}',
                 '--connect-timeout', '5', '--max-time', '8',
                 '--retry', '2', '--retry-delay', '1',
-                test_url  # ИСПРАВЛЕНО: было self.test_url
+                test_url
             ], capture_output=True, text=True, timeout=timeout)
-            
+
             speed = time.time() - start_time
-            success = result.returncode == 0 and result.stdout.strip() in ['200', '206', '301', '302']
-            
+            success = result.returncode == 0 and result.stdout.strip() in ['200', '204', '301', '302']
+
             return success, speed, test_url
-            
+
         except subprocess.TimeoutExpired:
             return False, timeout, test_url
         except Exception as e:
             self.logger.error(f"Ошибка тестирования: {e}")
             return False, timeout, test_url
 
-    def test_params(self, params, test_duration=15):
-        """Тестирование конкретных параметров с выводом информации"""
+    def test_params(self, params, test_duration=15, progress_callback=None):
+        """Тестирование конкретных параметров с выводом информации.
+
+        Запускает ciadpi на тестовом порту 127.0.0.1:1081 и проверяет
+        доступность контрольного URL через него (SOCKS5). Системный
+        сервис и VPN не затрагиваются.
+        """
         if self.is_searching:
             self.logger.warning("Поиск уже выполняется")
             return False, test_duration, "Пропуск (уже выполняется)"
-            
+
         self.logger.info(f"Тестирование параметров: {params}")
 
         if progress_callback:
-            progress_callback(-1,0, f"Запуск: {params}")
-        
+            progress_callback(-1, 0, f"Запуск: {params}")
+
         try:
-            # Запускаем ciadpi с параметрами
+            # Запускаем ciadpi с параметрами на тестовом порту
+            cmd = [str(self.ciadpi_path)] + params.split() + \
+                  ['-i', '127.0.0.1', '-p', str(self.test_port)]
             self.current_process = subprocess.Popen(
-                [str(self.ciadpi_path)] + params.split(),
-                stdout=subprocess.PIPE,
+                cmd,
+                stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE
             )
-            
+
             # Даем время на запуск
             time.sleep(3)
-            
-            # Тестируем соединение
-            success, speed = self.test_connection(test_duration - 3)
-            
+
+            # Если процесс умер сразу — параметры невалидны для этой версии
+            if self.current_process.poll() is not None:
+                err = ''
+                try:
+                    if self.current_process.stderr:
+                        err = self.current_process.stderr.read().decode(errors='replace').strip()
+                except Exception:
+                    pass
+                notes = f"ciadpi завершился сразу (код {self.current_process.returncode}): {err[:200]}"
+                self.logger.warning(notes)
+                self.add_to_history(params, False, test_duration, notes)
+                if progress_callback:
+                    progress_callback(0, 0, notes)
+                self.current_process = None
+                return False, test_duration, notes
+
+            # Тестируем соединение через тестовый прокси
+            success, speed, test_url = self.test_connection(test_duration - 3)
+
             # Останавливаем процесс
             self.stop_test()
-            
+
             # Добавляем в историю
             status = "Успешно" if success else "Неудача"
             message = f"{status}: {params}\nТест: {test_url}\nСкорость: {speed:.2f} сек"
 
-            # Добавляем в историю
-            notes = f"{status}, тест: {test_url}\n, скорость: {speed:.2f} сек"
+            notes = f"{status}, тест: {test_url}, скорость: {speed:.2f} сек"
             self.add_to_history(params, success, speed, notes)
-            
+
             if progress_callback:
                 progress_callback(0, 0, message)
 
             return success, speed, message
-            
+
         except Exception as e:
             error_msg = f"Ошибка: {params}\nПричина: {str(e)}"
             self.logger.error(f"Ошибка тестирования параметров {params}: {e}")
             self.add_to_history(params, False, test_duration, f"Ошибка: {str(e)}")
+            self.stop_test()
 
             if progress_callback:
                 progress_callback(0, 0, error_msg)
@@ -195,18 +236,18 @@ class CIAutoSearch:
             return new_combinations + history_combinations[:20]
 
         except ImportError:
-            # Fallback to basic combinations
+            # Fallback: базовые комбинации (проверены на текущем byedpi)
             base_combinations = [
-                "-o1 -o25+s -T3 -At o--tlsrec 1+s",
-                "-o2 -o15+s -T2 -At o--tlsrec",
-                "-o1 -o5+s -T1 -At",
-                "-o3 -o20+s -T3 -At o--tlsrec 2+s",
-                "-o1 -o10+s -T2 -At",
-                "-o4 -o25+s -T3 -At o--tlsrec",
-                "-o2 -o8+s -T1 -At",
-                "-o1 -o15+s -T3 -At o--tlsrec 1+s",
-                "-o3 -o12+s -T2 -At",
-                "-o1 -o20+s -T3 -At o--tlsrec"
+                "-T3 -A torst -o1 -o25+s -r 1+s",
+                "-T2 -A torst -o2 -o15+s -r 2+s",
+                "-T1 -A torst -o1 -o5+s",
+                "-T3 -A torst -o3 -o20+s -r 2+s",
+                "-T2 -A torst -o1 -o10+s",
+                "-T3 -A torst -o4 -o25+s -r 1+s",
+                "-T1 -A torst -o2 -o8+s",
+                "-T3 -A torst -o1 -o15+s -r 1+s",
+                "-T2 -A torst -o3 -o12+s",
+                "-T3 -A torst -o1 -o20+s -r 2+s"
             ]
             return base_combinations
 
@@ -234,7 +275,8 @@ class CIAutoSearch:
             
             self.logger.info(f"Тест {i+1}/{min(max_tests, len(combinations))}: {params}")
             
-            success, speed = self.test_params(params, test_duration)
+            success, speed, _ = self.test_params(params, test_duration,
+                                                 progress_callback=None)
             
             if success:
                 successful_params.append((params, speed))

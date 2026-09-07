@@ -24,8 +24,9 @@ class AdvancedParamGenerator:
             'tfo': ['-F', ''],
             
             # Автоматический режим
+            # -L: текущий byedpi принимает буквы s,o,n (не 0..3!)
             'auto': ['-A torst', '-A redirect', '-A ssl_err', '-A none', ''],
-            'auto_mode': ['-L 0', '-L 1', '-L 2', '-L 3', ''],
+            'auto_mode': ['-L s', '-L o', '-L n', '-L s,o', ''],
             'cache_ttl': ['-u 100800', '-u 86400', ''],
             'cache_dump': ['-y -', ''],
             
@@ -67,23 +68,24 @@ class AdvancedParamGenerator:
             '-o20', '-o21', '-o22', '-o23', '-o24', '-o25'
         ]
         
-        # Суффиксы для методов
-        self.method_suffixes = ['', '+s', '+m', '+e']
-        
-        # Известные рабочие комбинации
+        # Суффиксы для методов (первый флаг после + обязан быть s/h/n;
+        # m, e, r — только вторым: +sm, +se, +hr ...)
+        self.method_suffixes = ['', '+s', '+h', '+n', '+sm', '+hm', '+se']
+
+        # Известные рабочие комбинации (проверены на текущем бинарнике byedpi)
         self.known_working = [
-            "-o1 -o25+s -T3 -At o--tlsrec 1+s",
-            "-o2 -o15+s -T2 -At o--tlsrec",
-            "-o1 -o5+s -T1 -At",
-            "-o3 -o20+s -T3 -At o--tlsrec 2+s",
-            "-o4 -o25+s -T3 -At o--tlsrec"
+            "-T3 -A torst -o1 -o25+s -r 1+s",
+            "-T2 -A torst -o2 -o15+s -r 2+s",
+            "-T1 -A torst -o1 -o5+s",
+            "-T3 -A torst -o3 -o20+s -r 2+s",
+            "-T3 -A torst -o4 -o25+s -r 1+s"
         ]
 
     def generate_split_params(self) -> List[str]:
         """Генерация параметров split"""
         params = []
         for offset in range(0, 10):
-            for flag in ['+s', '+h', '+n', '+sm', '+hm', '+em']:
+            for flag in ['+s', '+h', '+n', '+sm', '+hm', '+em', '+se']:
                 params.append(f"-s {offset}{flag}")
         return params + ['']
 
@@ -91,7 +93,7 @@ class AdvancedParamGenerator:
         """Генерация параметров disorder"""
         params = []
         for offset in range(0, 5):
-            for flag in ['+s', '+h', '+m']:
+            for flag in ['+s', '+h', '+n', '+sm', '+hm']:
                 params.append(f"-d {offset}{flag}")
         return params + ['']
 
@@ -105,7 +107,7 @@ class AdvancedParamGenerator:
 
     def generate_fake_params(self) -> List[str]:
         """Генерация параметров fake"""
-        return [f"-f {i}+m" for i in range(0, 5)] + ['']
+        return [f"-f {i}+s" for i in range(0, 5)] + ['']
 
     def generate_tlsrec_params(self) -> List[str]:
         """Генерация параметров tlsrec"""
@@ -240,15 +242,15 @@ class AdvancedParamGenerator:
         return True, ""
 
     def get_usage_examples(self) -> List[str]:
-        """Получить примеры использования для UI"""
+        """Получить примеры использования для UI (проверены на byedpi)"""
         return [
-            "-o1 -o25+s -T3 -At o--tlsrec 1+s",
-            "-o2 -o15+s -T2 -At o--tlsrec", 
-            "-o1 -o5+s -T1 -At",
-            "-o3 -o20+s -T3 -At o--tlsrec 2+s",
-            "-o4 -o10+m -T5 -A torst -L 1",
-            "-o7 -o18+e -T2 -s 5+sm -d 2+h",
-            "-o1 -o12+s -T3 -f 3+m -r 5"
+            "-T3 -A torst -o1 -o25+s -r 1+s",
+            "-T2 -A torst -o2 -o15+s -r 2+s",
+            "-T1 -A torst -o1 -o5+s",
+            "-T3 -A torst -o3 -o20+s -r 2+s",
+            "-T5 -A torst -o4 -o10+s",
+            "-T2 -A torst -o7 -o18+s -s 5+sm -d 2+h",
+            "-T3 -A torst -o1 -o12+s -f 3+s -r 5"
         ]
 
     def mutate_params(self, base_params: str, intensity: float = 0.3) -> str:

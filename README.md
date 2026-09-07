@@ -205,7 +205,7 @@ export https_proxy=http://127.0.0.1:1080
 All proxy settings are stored in `~/.config/ciadpi/config.json`:
 ```json
 {
-  "params": "-o1 -o25+s -T3 -At o--tlsrec 1+s",
+  "params": "-T3 -A torst -o1 -o25+s -r 1+s",
   "proxy_enabled": true,
   "proxy_mode": "manual",
   "proxy_host": "",

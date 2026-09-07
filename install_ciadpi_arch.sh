@@ -165,7 +165,7 @@ except (ValueError, ImportError):
 # Get current params from existing config (или default)
 get_current_params() {
     local config_file="$HOME/.config/ciadpi/config.json"
-    local default_params="-o1 -o25+s -T3 -At o--tlsrec 1+s"
+    local default_params="-T3 -A torst -o1 -o25+s -r 1+s"
     
     if [ -f "$config_file" ]; then
         python3 -c "
@@ -319,6 +319,8 @@ WorkingDirectory=$HOME/byedpi
 ExecStart=$HOME/byedpi/ciadpi $CURRENT_PARAMS
 Restart=on-failure
 RestartSec=5
+StartLimitBurst=5
+StartLimitIntervalSec=60
 TimeoutStartSec=30
 
 [Install]
@@ -380,7 +382,7 @@ try:
         cfg = json.load(f)
     changed = False
     if not cfg.get('params'):
-        cfg['params'] = cfg.get('current_params', '-o1 -o25+s -T3 -At o--tlsrec 1+s')
+        cfg['params'] = cfg.get('current_params', '-T3 -A torst -o1 -o25+s -r 1+s')
         changed = True
     if not cfg.get('current_params'):
         cfg['current_params'] = cfg['params']

@@ -117,14 +117,14 @@ class StrategySearcher:
         combos = []
 
         known_working = [
-            "-o1 -o25+s -T3 -At o--tlsrec 1+s",
-            "-o2 -o15+s -T2 -At o--tlsrec",
-            "-o1 -o5+s -T1 -At",
-            "-o3 -o20+s -T3 -At o--tlsrec 2+s",
-            "-o1 -o10+s -T2 -At",
-            "-o5 -o25+s -T2 -At o--tlsrec 1+s",
-            "-o9 -o13+s -T3 -At o--tlsrec 2+s",
-            "-o1 -o2 -o25+s -T3 -At o--tlsrec 1+s",
+            "-T3 -A torst -o1 -o25+s -r 1+s",
+            "-T2 -A torst -o2 -o15+s -r 2+s",
+            "-T1 -A torst -o1 -o5+s",
+            "-T3 -A torst -o3 -o20+s -r 2+s",
+            "-T2 -A torst -o1 -o10+s",
+            "-T2 -A torst -o5 -o25+s -r 1+s",
+            "-T3 -A torst -o9 -o13+s -r 2+s",
+            "-T3 -A torst -o1 -o2 -o25+s -r 1+s",
         ]
         combos.extend(known_working)
 
@@ -155,7 +155,9 @@ class StrategySearcher:
         ok_count = 0
         speeds = []
         details = []
-        env_proxy_url = f"http://127.0.0.1:{self.test_port}"
+        # ciadpi — SOCKS4/5-прокси: HTTP CONNECT не принимает
+        # ('ss: invalid version: 0x43'), поэтому только socks5h://
+        env_proxy_url = f"socks5h://127.0.0.1:{self.test_port}"
 
         for url in test_urls:
             start = time.time()

@@ -40,9 +40,11 @@ Wants=network.target
 Type=simple
 User=$REAL_USER
 WorkingDirectory=$(dirname "$CIADPI_BIN")
-ExecStart=$CIADPI_BIN -o1 -o25+s -T3 -At o--tlsrec 1+s
+ExecStart=$CIADPI_BIN -T3 -A torst -o1 -o25+s -r 1+s
 Restart=on-failure
 RestartSec=5
+StartLimitBurst=5
+StartLimitIntervalSec=60
 TimeoutStartSec=30
 
 [Install]

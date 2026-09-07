@@ -3,6 +3,12 @@ Description=CIADPI DPI Bypass Service
 After=network.target
 Wants=network.target
 
+# Не устраиваем вечный crash-loop: после 5 неудачных запусков
+# подряд systemd сдаётся (до ручного restart). Без этого лимита
+# невалидные параметры крутили юнит бесконечно (100k+ рестартов).
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
 [Service]
 Type=simple
 Restart=on-failure

@@ -45,7 +45,8 @@ HELP_TEXTS = {
     АВТОМАТИЧЕСКИЙ РЕЖИМ:
     -T SEC       таймаут ожидания ответа до срабатывания auto
     -A MODE      триггер: torst, redirect, ssl_err, none, conn
-    -L MODE      поведение после триггера: 0..3
+    -L MODE      поведение после триггера: s, o, n (можно через запятую:
+                 s=кешировать, o=переподключать, n=не переподключать)
     -u SEC       TTL кэша подобранных параметров для IP
 
     ФИЛЬТРЫ:
@@ -63,8 +64,9 @@ HELP_TEXTS = {
     -o POS       OOB — отправка как out-of-band данных
     -q POS       disoob — обратный порядок + OOB
     -f POS       fake — отправка поддельного пакета перед настоящим
-    -oN          числовые методы обхода: -o1 … -o25 с суффиксами s/m/e,
-                 например: -o1 -o25+s
+    -oN          числовые методы обхода: -o1 … -o25;
+                 суффикс после + обязан начинаться с s/h/n,
+                 например: -o1 -o25+s -o10+sm
 
     FAKE-ПАКЕТЫ И МОДИФИКАЦИИ:
     -t TTL       TTL fake-пакетов (default 8)
@@ -81,9 +83,11 @@ HELP_TEXTS = {
     -Y           отбрасывать пакеты с SACK
 
     ПРИМЕРЫ РАБОЧИХ КОНФИГУРАЦИЙ:
-    • -o1 -o25+s -T3 -At o--tlsrec 1+s
-    • -o2 -o15+s -T2 -At o--tlsrec
-    • -o3 -o20+s -T3 -At o--tlsrec 2+s
+    (desync-методы — ПОСЛЕ -A: применяются только при блокировке,
+     сайты без блокировки идут напрямую без искажений)
+    • -T3 -A torst -o1 -o25+s -r 1+s
+    • -T2 -A torst -o2 -o15+s -r 2+s
+    • -T3 -A torst -o3 -o20+s -r 2+s
 
     💡 СОВЕТЫ:
     • Используйте примеры для быстрого старта
@@ -134,7 +138,8 @@ HELP_TEXTS = {
     AUTOMATIC MODE:
     -T SEC       response timeout before auto triggers
     -A MODE      trigger: torst, redirect, ssl_err, none, conn
-    -L MODE      post-trigger behaviour: 0..3
+    -L MODE      post-trigger behaviour: s, o, n (comma-separated:
+                 s=cache, o=reconnect, n=no reconnect)
     -u SEC       per-IP desync params cache TTL
 
     FILTERS:
@@ -152,8 +157,9 @@ HELP_TEXTS = {
     -o POS       OOB — send as out-of-band data
     -q POS       disoob — reverse order + OOB
     -f POS       fake — send a fake packet before the real one
-    -oN          numeric desync methods: -o1 … -o25 with s/m/e suffixes,
-                 e.g.: -o1 -o25+s
+    -oN          numeric desync methods: -o1 … -o25;
+                 the suffix after + must start with s/h/n,
+                 e.g.: -o1 -o25+s -o10+sm
 
     FAKE PACKETS & MODIFICATIONS:
     -t TTL       fake packet TTL (default 8)
@@ -170,9 +176,11 @@ HELP_TEXTS = {
     -Y           drop packets with SACK extension
 
     WORKING CONFIGURATION EXAMPLES:
-    • -o1 -o25+s -T3 -At o--tlsrec 1+s
-    • -o2 -o15+s -T2 -At o--tlsrec
-    • -o3 -o20+s -T3 -At o--tlsrec 2+s
+    (desync methods go AFTER -A: applied only on blocking,
+     unblocked sites pass through untouched)
+    • -T3 -A torst -o1 -o25+s -r 1+s
+    • -T2 -A torst -o2 -o15+s -r 2+s
+    • -T3 -A torst -o3 -o20+s -r 2+s
 
     💡 TIPS:
     • Use examples for a quick start

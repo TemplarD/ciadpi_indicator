@@ -165,7 +165,7 @@ install_dependencies() {
 # Функция для получения текущих параметров
 get_current_params() {
     local config_file="$HOME/.config/ciadpi/config.json"
-    local default_params="-o1 -o25+s -T3 -At o--tlsrec 1+s"
+    local default_params="-T3 -A torst -o1 -o25+s -r 1+s"
     
     if [ -f "$config_file" ]; then
         local params_from_config=$(python3 -c "
@@ -201,6 +201,8 @@ WorkingDirectory=$byedpi_dir
 ExecStart=$byedpi_dir/ciadpi $current_params
 Restart=on-failure
 RestartSec=5
+StartLimitBurst=5
+StartLimitIntervalSec=60
 TimeoutStartSec=30
 
 [Install]
@@ -342,11 +344,11 @@ setup_config() {
     if [ ! -f "$config_dir/config.json" ]; then
         cat << EOF > "$config_dir/config.json"
 {
-    "params": "-o1 -o25+s -T3 -At o--tlsrec 1+s",
+    "params": "-T3 -A torst -o1 -o25+s -r 1+s",
     "proxy_enabled": false,
     "proxy_host": "",
     "proxy_port": "1080",
-    "current_params": "-o1 -o25+s -T3 -At o--tlsrec 1+s"
+    "current_params": "-T3 -A torst -o1 -o25+s -r 1+s"
 }
 EOF
         log "Default configuration created"

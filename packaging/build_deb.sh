@@ -133,7 +133,7 @@ else
         exit 0
     fi
 
-    PARAMS="-o1 -o25+s -T3 -At o--tlsrec 1+s"
+    PARAMS="-T3 -A torst -o1 -o25+s -r 1+s"
     cat > /etc/systemd/system/ciadpi.service <<UNIT
 [Unit]
 Description=CIADPI DPI Bypass Service
@@ -147,6 +147,8 @@ WorkingDirectory=$(dirname "$CIADPI_BIN")
 ExecStart=$CIADPI_BIN $PARAMS
 Restart=on-failure
 RestartSec=5
+StartLimitBurst=5
+StartLimitIntervalSec=60
 TimeoutStartSec=30
 
 [Install]
