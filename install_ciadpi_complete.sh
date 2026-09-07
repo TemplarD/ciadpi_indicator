@@ -280,6 +280,7 @@ install_python_scripts() {
         [ -f "ciadpi_strategy_search.py" ] && cp "ciadpi_strategy_search.py" "$HOME/.local/bin/"
         [ -f "ciadpi_i18n.py" ] && cp "ciadpi_i18n.py" "$HOME/.local/bin/"          # Локализация RU/EN
         [ -f "ciadpi_params_spec.py" ] && cp "ciadpi_params_spec.py" "$HOME/.local/bin/"  # Конструктор параметров
+        [ -f "ciadpi_texts.py" ] && cp "ciadpi_texts.py" "$HOME/.local/bin/"        # Тексты справки/о программе
         
     else
         # УДАЛЕННАЯ установка - скачиваем с GitHub
@@ -299,6 +300,7 @@ install_python_scripts() {
         wget -q -O "$HOME/.local/bin/ciadpi_strategy_search.py" "$BASE_URL/ciadpi_strategy_search.py" 2>/dev/null || warn "Strategy search script not available"
         wget -q -O "$HOME/.local/bin/ciadpi_i18n.py" "$BASE_URL/ciadpi_i18n.py" 2>/dev/null || warn "i18n module not available"
         wget -q -O "$HOME/.local/bin/ciadpi_params_spec.py" "$BASE_URL/ciadpi_params_spec.py" 2>/dev/null || warn "Params spec module not available"
+        wget -q -O "$HOME/.local/bin/ciadpi_texts.py" "$BASE_URL/ciadpi_texts.py" 2>/dev/null || warn "Help/About texts module not available"
     fi
     
     log "Python scripts installed to ~/.local/bin/"

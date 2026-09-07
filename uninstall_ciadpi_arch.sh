@@ -125,6 +125,38 @@ log_info "✓ Scripts and binaries removed from ~/.local/bin/"
 # Step 6: Remove configuration (with confirmation)
 log_step "Step 6/8: Removing configuration files"
 
+# ⭐ Restore system proxy from our backup BEFORE deleting configs
+# (v1.6.1+ persist backup): if proxy_backup.json exists, the system
+# proxy was modified and never restored — put it back now.
+PB="$HOME/.config/ciadpi/proxy_backup.json"
+if [ -f "$PB" ]; then
+    log_info "Found system proxy backup — restoring original settings..."
+    python3 - "$PB" <<'PYEOF'
+import json, subprocess, sys
+try:
+    b = json.load(open(sys.argv[1]))
+    subprocess.run(['gsettings', 'set', 'org.gnome.system.proxy', 'mode',
+                    b.get('mode', 'none')], check=False)
+    if b.get('fields_captured'):
+        for sch, hk, pk in (('http', 'http_host', 'http_port'),
+                            ('socks', 'socks_host', 'socks_port')):
+            subprocess.run(['gsettings', 'set',
+                            f'org.gnome.system.proxy.{sch}', 'host',
+                            b.get(hk, '')], check=False)
+            subprocess.run(['gsettings', 'set',
+                            f'org.gnome.system.proxy.{sch}', 'port',
+                            str(b.get(pk, '8080'))], check=False)
+    if b.get('ignore_hosts'):
+        subprocess.run(['gsettings', 'set', 'org.gnome.system.proxy',
+                        'ignore-hosts', b['ignore_hosts']], check=False)
+    print("proxy restored from backup")
+except Exception as e:
+    print("restore failed:", e)
+PYEOF
+    rm -f "$PB"
+    log_info "✓ System proxy backup applied and removed"
+fi
+
 if [ -d "$HOME/.config/ciadpi" ]; then
     read -r -p "Remove ALL configuration including history/logs? (y/N): " REPLY_CFG
     echo ""

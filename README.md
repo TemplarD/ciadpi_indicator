@@ -174,31 +174,50 @@ No root reinstall needed: everything happens inside your home directory.
 
 #### Enhanced Proxy Management
 
+> ⭐ **IMPORTANT: ciadpi/byedpi is a SOCKS5 proxy — NOT an HTTP proxy.**
+> It does not accept HTTP CONNECT (`ss: invalid version: 0x43`).
+> Always configure applications for **SOCKS5**, never plain HTTP proxy.
+> The indicator configures the system proxy correctly (SOCKS host in
+> GNOME settings) and shows a **live TCP probe** (🟢/🔴) of the
+> configured host:port in the proxy dialog — the service must be
+> listening there.
+
 For applications to use the DPI bypass, you need to configure proxy settings:
 
 **Option 1: System-wide proxy (recommended)**
 - Open CIADPI indicator → Proxy Settings
-- Set mode to "Manual"
-- Leave host field **empty**
-- Set port to 1080
+- Set mode to "Manual" (system) or "Local" (no system changes)
+- Host `127.0.0.1`, port `1080` (the service is started and its
+  `-p` port is kept in sync with this setting automatically)
 
-**Option 2: Browser proxy**
-- Firefox: Settings → Network Settings → Manual proxy configuration
-- Chrome: Use --proxy-server=127.0.0.1:1080 launch flag
-- Set HTTP/HTTPS proxy to 127.0.0.1:1080
-- Try with host field **empty**, only port, if not working
+**Option 2: Browser proxy (SOCKS5!)**
+- Firefox: Settings → Network Settings → **SOCKS Host** 127.0.0.1:1080,
+  select "SOCKS v5" (do NOT fill HTTP/SSL proxy fields)
+- Chrome/Chromium: launch flag `--proxy-server=socks5://127.0.0.1:1080`
 
 **Option 3: Environment variables**
 ```
-export http_proxy=http://127.0.0.1:1080
-export https_proxy=http://127.0.0.1:1080
+export http_proxy=socks5://127.0.0.1:1080
+export https_proxy=socks5://127.0.0.1:1080
 ```
+(curl/wget/apt understand `socks5://` URLs in `*_proxy` vars.)
 
 ## 🔧 Proxy Modes:
 
-- **Manual Proxy**: Set specific host and port (empty host = port-only configuration)
-- **Automatic (PAC)**: Use Proxy Auto-Configuration URL
-- **Disabled**: No proxy
+- **Manual (system)**: writes a SOCKS5 host:port into GNOME proxy
+  settings; the service is started if stopped and its port is synced
+- **Local**: system settings untouched — point specific apps at the
+  port yourself (the service is still started and its port kept in sync)
+- **System PAC script**: GNOME "Automatic" mode — configured by a
+  provider PAC URL, NOT related to ciadpi. Do not use unless your
+  provider gave you a PAC URL
+- **Disabled**: no proxy; original system settings are restored
+
+On every change the original system proxy is backed up to
+`~/.config/ciadpi/proxy_backup.json` (survives indicator restarts) and
+restored when you switch to Local/Disabled or on exit — including the
+SOCKS fields, ignore-hosts and the PAC URL. Uninstallers also restore
+it from the backup before deleting configs.
 
 ## 💾 Configuration Persistence:
 

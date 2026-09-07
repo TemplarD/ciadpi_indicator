@@ -263,6 +263,7 @@ main() {
         "ciadpi_strategy_search.py"
         "ciadpi_i18n.py"
         "ciadpi_params_spec.py"
+        "ciadpi_texts.py"
         "ciadpi_autosearch.py"
         "ciadpi_param_generator.py"
         "ciadpi_whitelist.py"

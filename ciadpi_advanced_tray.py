@@ -995,11 +995,15 @@ class AdvancedTrayIndicator:
             
             host = self.current_params.get("proxy_host", "127.0.0.1")
             port = self.current_params.get("proxy_port", "1080")
-            
+
+            # ⭐ ciadpi — SOCKS5-прокси: HTTP CONNECT он не принимает,
+            # поэтому переменные окружения обязаны быть socks5://
+            # (раньше писался http:// — curl/apt уходили в SOCKS-порт
+            # по HTTP-протоколу и падали)
             if host:  # Если хост не пустой
-                proxy_url = f"http://{host}:{port}"
+                proxy_url = f"socks5://{host}:{port}"
             else:
-                proxy_url = f"http://:{port}"  # Формат с пустым хостом
+                proxy_url = f"socks5://127.0.0.1:{port}"
                 
             env_vars = {
                 'http_proxy': proxy_url,
@@ -1218,6 +1222,7 @@ class AdvancedTrayIndicator:
         mode_combo.append_text(t('proxy.mode_manual'))  # 1 manual
         mode_combo.append_text(t('proxy.mode_off'))     # 2 none
         mode_combo.append_text(t('proxy.mode_local'))   # 3 local
+        mode_combo.set_tooltip_text(t('proxy.mode_pac_h'))
 
         # ⭐ Режим берём ИЗ КОНФИГА (что пользователь задал последним),
         # а не из gsettings
@@ -1319,14 +1324,15 @@ class AdvancedTrayIndicator:
             status_lines.append("✅ " + t('proxy.applied_ok'))
 
         # ⭐ Результат живой пробы — сразу видно, отвечает ли порт
-        status_lines.append(
-            ("🟢 " if port_alive else "🔴 ")
-            + f"{probe_host}:{saved_port} "
-            + ("порт отвечает — сервис слушает" if port_alive else "порт НЕ отвечает — сервис не запущен или слушает другой порт"))
+        # (проба = TCP-соединение с host:port; загорается в статус-блоке)
+        status_lines.append((t('proxy.probe_ok') if port_alive else t('proxy.probe_fail'))
+                            + f"\n   {probe_host}:{saved_port}")
+        status_lines.append(t('proxy.type_socks'))
 
         status_label = Gtk.Label(label="\n".join(status_lines))
         status_label.set_xalign(0)
         status_label.set_line_wrap(True)
+        status_label.set_tooltip_text(t('proxy.probe_hint'))
         status_label.get_style_context().add_class('dim-label')
 
         # ЧЕКБОКС для автоматического отключения прокси
@@ -1371,11 +1377,31 @@ class AdvancedTrayIndicator:
 
             # ⭐ ЛОКАЛЬНЫЙ РЕЖИМ: системные настройки не трогаем вообще
             if selected_mode == 'local':
-                # Если раньше меняли системные — возвращаем как было
-                if self.we_changed_proxy:
+                # Если раньше меняли системные — возвращаем как было.
+                # ⭐ Раньше смотрели только флаг в памяти: после перезапуска
+                # программы он False (даже если система остаётся нашей),
+                # и «залипший» ручной прокси не вычищался. Теперь: если
+                # флаг не стоит, но в системе наши значения — тоже откат.
+                need_restore = self.we_changed_proxy
+                if not need_restore:
+                    sys_now = self.get_system_proxy_settings()
+                    if (sys_now.get('mode') == 'manual'
+                            and sys_now.get('socks_host') in ('127.0.0.1', 'localhost')
+                            and sys_now.get('socks_port') == proxy_port):
+                        # система указывает на наш SOCKS — это наш след
+                        need_restore = True
+                        print("🔌 Обнаружен наш прокси в системе без флага — откатываю")
+                if need_restore:
                     self.restore_system_proxy_backup()
                     self.we_changed_proxy = False
                     print("💾 Локальный режим: системные настройки прокси восстановлены")
+
+                # ⭐ ЛОКАЛЬНЫЙ РЕЖИМ ТОЖЕ ТРЕБУЕТ ЖИВОГО СЕРВИСА: прокси
+                # доступен приложениям только если ciadpi слушает порт.
+                # Раньше local можно было включить при остановленном сервисе —
+                # «порт указан, а прокси не отвечает».
+                if self._ensure_service_running_for_proxy():
+                    self._sync_service_port_with_proxy(proxy_port)
 
                 self.current_params["proxy_enabled"] = True
                 self.current_params["proxy_host"] = proxy_host or "127.0.0.1"
@@ -1537,15 +1563,17 @@ class AdvancedTrayIndicator:
             'mode': 'none',
             'http_host': '',
             'http_port': '8080',  # дефолтный порт
+            'socks_host': '',
+            'socks_port': '1080',
             'ignore_hosts': '[]'
         }
-        
+
         try:
             # Получаем режим прокси
             result = subprocess.run([
                 'gsettings', 'get', 'org.gnome.system.proxy', 'mode'
             ], capture_output=True, text=True, check=False)
-            
+
             if result.returncode == 0:
                 mode = result.stdout.strip().strip("'")
                 settings['mode'] = mode
@@ -1563,6 +1591,19 @@ class AdvancedTrayIndicator:
                     settings['http_host'] = host_result.stdout.strip().strip("'")
                 if port_result.returncode == 0:
                     settings['http_port'] = port_result.stdout.strip()
+
+                # ⭐ SOCKS-поля тоже бэкапим — наш прокси живёт именно там,
+                # восстановление обязано вернуть и их
+                socks_host_r = subprocess.run([
+                    'gsettings', 'get', 'org.gnome.system.proxy.socks', 'host'
+                ], capture_output=True, text=True, check=False)
+                socks_port_r = subprocess.run([
+                    'gsettings', 'get', 'org.gnome.system.proxy.socks', 'port'
+                ], capture_output=True, text=True, check=False)
+                if socks_host_r.returncode == 0:
+                    settings['socks_host'] = socks_host_r.stdout.strip().strip("'")
+                if socks_port_r.returncode == 0:
+                    settings['socks_port'] = socks_port_r.stdout.strip()
 
                 # Игнорируемые хосты — тоже при любом режиме
                 ignore_result = subprocess.run([
@@ -1586,54 +1627,57 @@ class AdvancedTrayIndicator:
         return settings
 
     def apply_system_proxy(self, mode, host, port, apply_whitelist=True):
-        """Применение системных настроек прокси через NetworkManager.
+        """Применение системных настроек прокси через GNOME (gsettings).
+
+        ⭐ CRITICAL: ciadpi — это SOCKS5-прокси (HTTP CONNECT он НЕ
+        принимает: 'ss: invalid version: 0x43'). Раньше адрес писался
+        в http/https/ftp-схемы — браузеры честно шли по HTTP-протоколу
+        в SOCKS-порт и ломались. Теперь:
+          - manual → режим 'manual' + адрес ТОЛЬКО в socks-схему,
+            http/https/ftp при этом сбрасываются к заводским;
+          - если в системе включён use-same-proxy — отключаем его:
+            он заставляет всё идти через http-схему.
 
         apply_whitelist=False — режим восстановления исходных настроек:
         белый список не вмешивается (иначе он затрёт оригинальный
-        ignore-hosts, который restore восстановит следом — лишняя
-        перезапись чужих настроек).
+        ignore-hosts, который restore восстановит следом).
         """
         try:
             # Только применяем настройки, не сохраняем оригинальные здесь
             # Оригинальные сохраняются только при первом включении нашего прокси
-            
+
             subprocess.run([
                 'gsettings', 'set', 'org.gnome.system.proxy', 'mode', mode
             ], check=False)
-            
+
             if mode == 'manual':
-                # Используем ПУСТОЕ значение если host пустой
-                effective_host = host  # Может быть пустой строкой!
-                
-                # Настраиваем HTTP
+                # ⭐ Пишем в SOCKS-схему — ciadpi говорит по SOCKS5
                 subprocess.run([
-                    'gsettings', 'set', 'org.gnome.system.proxy.http', 'host', effective_host
+                    'gsettings', 'set', 'org.gnome.system.proxy.socks', 'host',
+                    host if host else '127.0.0.1'
                 ], check=False)
                 subprocess.run([
-                    'gsettings', 'set', 'org.gnome.system.proxy.http', 'port', port
+                    'gsettings', 'set', 'org.gnome.system.proxy.socks', 'port',
+                    str(port)
                 ], check=False)
-                
-                # Настраиваем HTTPS
+
+                # HTTP/HTTPS/FTP-схемы НЕ должны указывать на SOCKS-порт:
+                # сбрасываем к заводским (иначе браузер пытается HTTP CONNECT
+                # в SOCKS-порт и падает)
+                for schema in ('http', 'https', 'ftp'):
+                    subprocess.run(['gsettings', 'reset',
+                                    f'org.gnome.system.proxy.{schema}', 'host'],
+                                   check=False)
+                    subprocess.run(['gsettings', 'reset',
+                                    f'org.gnome.system.proxy.{schema}', 'port'],
+                                   check=False)
+
+                # use-same-proxy гоняет трафик через http-схему — выключаем
                 subprocess.run([
-                    'gsettings', 'set', 'org.gnome.system.proxy.https', 'host', effective_host
+                    'gsettings', 'set', 'org.gnome.system.proxy', 'use-same-proxy',
+                    'false'
                 ], check=False)
-                subprocess.run([
-                    'gsettings', 'set', 'org.gnome.system.proxy.https', 'port', port
-                ], check=False)
-                
-                # Настраиваем FTP
-                subprocess.run([
-                    'gsettings', 'set', 'org.gnome.system.proxy.ftp', 'host', effective_host
-                ], check=False)
-                subprocess.run([
-                    'gsettings', 'set', 'org.gnome.system.proxy.ftp', 'port', port
-                ], check=False)
-                
-                # Используем одинаковые настройки для всех протоколов
-                subprocess.run([
-                    'gsettings', 'set', 'org.gnome.system.proxy', 'use-same-proxy', 'true'
-                ], check=False)
-                
+
             elif mode == 'auto':
                 # Для автоматического режима обычно нужен PAC URL
                 pass
@@ -1642,7 +1686,7 @@ class AdvancedTrayIndicator:
                 # ⭐ Отключение прокси: вычищаем и ручные поля, иначе
                 # в настройках GNOME остаются наши host/port от прошлого
                 # manual-применения («не приведено в исходное состояние»).
-                for schema in ('http', 'https', 'ftp'):
+                for schema in ('http', 'https', 'ftp', 'socks'):
                     subprocess.run(['gsettings', 'reset',
                                     f'org.gnome.system.proxy.{schema}', 'host'],
                                    check=False)
@@ -1689,12 +1733,12 @@ class AdvancedTrayIndicator:
         """Применение прокси через переменные окружения"""
         try:
             if mode == 'manual':
-                # Формируем строку прокси - если хост ПУСТОЙ, используем только порт
+                # ⭐ ciadpi — SOCKS5: переменные окружения socks5://
+                # (curl/apt/wget понимают socks5:// в *_proxy)
                 if host:
-                    proxy_url = f"http://{host}:{port}"
+                    proxy_url = f"socks5://{host}:{port}"
                 else:
-                    # ПУСТОЙ хост - используем только порт (некоторые приложения так работают)
-                    proxy_url = f"http://:{port}"  # Формат с пустым хостом
+                    proxy_url = f"socks5://127.0.0.1:{port}"
                 
                 # Создаем скрипт для применения переменных (для новых терминалов)
                 env_file = Path.home() / '.proxy_env'
@@ -1983,12 +2027,12 @@ class AdvancedTrayIndicator:
             # Применяем оригинальные настройки
             if original_host is None:
                 # Исходные поля неизвестны (старый бэкап) — режим ставим,
-                # а ручные поля http/https/ftp сбрасываем к заводским,
+                # а ручные поля http/https/ftp/socks сбрасываем к заводским,
                 # иначе в GNOME останутся наши 127.0.0.1:порт
                 subprocess.run(['gsettings', 'set',
                                 'org.gnome.system.proxy', 'mode', original_mode],
                                check=False)
-                for schema in ('http', 'https', 'ftp'):
+                for schema in ('http', 'https', 'ftp', 'socks'):
                     subprocess.run(['gsettings', 'reset',
                                     f'org.gnome.system.proxy.{schema}', 'host'],
                                    check=False)
@@ -2000,6 +2044,19 @@ class AdvancedTrayIndicator:
             else:
                 success = self.apply_system_proxy(original_mode, original_host, original_port,
                                                   apply_whitelist=False)
+                # ⭐ SOCKS-поля восстанавливаем отдельно: apply пишет их
+                # только при manual, а исходный режим мог быть любым
+                if success and fields_captured:
+                    subprocess.run(['gsettings', 'set',
+                                    'org.gnome.system.proxy.socks', 'host',
+                                    backup.get('socks_host', '')],
+                                   check=False)
+                    subprocess.run(['gsettings', 'set',
+                                    'org.gnome.system.proxy.socks', 'port',
+                                    str(backup.get('socks_port', '1080'))],
+                                   check=False)
+                    print(f"✅ SOCKS-поля восстановлены: "
+                          f"{backup.get('socks_host', '')}:{backup.get('socks_port', '1080')}")
 
             # Восстанавливаем оригинальный ignore-hosts из бэкапа
             original_ignore = backup.get('ignore_hosts')
@@ -2531,7 +2588,8 @@ class AdvancedTrayIndicator:
         searcher = StrategySearcher()
 
         dialog = Gtk.Dialog(title=t('search.title'), flags=0)
-        dialog.add_buttons(t('btn.close'), Gtk.ResponseType.CLOSE)
+        # ⭐ Кнопка Close в action area НЕ нужна: GTK рисует свою
+        # «Закрыть» в заголовке окна — раньше их было ДВЕ.
         dialog.set_default_size(760, 560)
         self.strategy_window = dialog
 
@@ -2647,9 +2705,13 @@ class AdvancedTrayIndicator:
                         ui_set_progress(frac, f"{t('search.test')} {idx}: {t('search.ok_urls')} ({r['urls_ok']}/{r['urls_total']} URL)")
                         ui_log(f"[{idx}] ✅ {r['urls_ok']}/{r['urls_total']} URL, "
                                f"{t('search.avg_speed')} {r['speed']:.2f}s | {r['params']}")
-                        for url, ok, code, t in r.get('details', []):
+                        # ⭐ переменная называется sec, НЕ t: раньше цикл
+                        # `for ... t in details` затенял функцию перевода t()
+                        # и UnboundLocalError убивал КАЖДОЕ обновление GUI —
+                        # лог навсегда оставался с одной строкой
+                        for url, ok, code, sec in r.get('details', []):
                             mark = "✅" if ok else "❌"
-                            ui_log(f"      {mark} {url} → HTTP {code} ({t}с)")
+                            ui_log(f"      {mark} {url} → HTTP {code} ({sec}с)")
                     else:
                         ui_set_progress(frac, f"{t('search.test')} {idx}: {t('search.fail')}")
                         err = (r.get('error') or '')[:120]
@@ -2727,8 +2789,18 @@ class AdvancedTrayIndicator:
         btn_start.connect("clicked", on_start)
         btn_stop.connect("clicked", on_stop)
         btn_apply.connect("clicked", on_apply)
-        dialog.connect("response",
-                       lambda d, r: searcher.stop_search() if state['running'] else None)
+
+        def on_dialog_response(d, response):
+            # ⭐ Раньше окно не уничтожалось по «Закрыть» — response лишь
+            # останавливал поиск, диалог оставался висеть (модально!).
+            try:
+                if state['running']:
+                    searcher.stop_search()
+            finally:
+                d.destroy()
+                self.strategy_window = None
+
+        dialog.connect("response", on_dialog_response)
 
         dialog.show_all()
 

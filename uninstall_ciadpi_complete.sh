@@ -135,7 +135,9 @@ remove_user_files() {
         "ciadpi_strategy_search.py"
         "ciadpi_i18n.py"
         "ciadpi_params_spec.py"
+        "ciadpi_texts.py"
         "ciadpi_privileges.sh"
+        "diagnose_ciadpi.py"
     )
     
     for script in "${scripts[@]}"; do
@@ -178,6 +180,39 @@ cleanup_optional() {
         else
             log "Конфигурация оставлена в ~/.config/ciadpi/"
         fi
+    fi
+
+    # ⭐ Бэкап исходных настроек системного прокси (v1.6.1+): если он
+    # остался — система была изменена и не восстановлена. Возвращаем
+    # настройки из бэкапа в gsettings ДО удаления, чтобы не оставить
+    # пользователю наш прокси навсегда.
+    local PB="$HOME/.config/ciadpi/proxy_backup.json"
+    if [ -f "$PB" ]; then
+        log "Найден бэкап исходных настроек прокси — восстанавливаю..."
+        python3 - "$PB" <<'PYEOF'
+import json, subprocess, sys
+try:
+    b = json.load(open(sys.argv[1]))
+    subprocess.run(['gsettings', 'set', 'org.gnome.system.proxy', 'mode',
+                    b.get('mode', 'none')], check=False)
+    if b.get('fields_captured'):
+        for sch, hk, pk in (('http', 'http_host', 'http_port'),
+                            ('socks', 'socks_host', 'socks_port')):
+            subprocess.run(['gsettings', 'set',
+                            f'org.gnome.system.proxy.{sch}', 'host',
+                            b.get(hk, '')], check=False)
+            subprocess.run(['gsettings', 'set',
+                            f'org.gnome.system.proxy.{sch}', 'port',
+                            str(b.get(pk, '8080'))], check=False)
+    if b.get('ignore_hosts'):
+        subprocess.run(['gsettings', 'set', 'org.gnome.system.proxy',
+                        'ignore-hosts', b['ignore_hosts']], check=False)
+    print("proxy restored from backup")
+except Exception as e:
+    print("restore failed:", e)
+PYEOF
+        rm -f "$PB"
+        log "Бэкап прокси применён и удалён"
     fi
     
     # Логи
