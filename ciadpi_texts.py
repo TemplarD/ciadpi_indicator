@@ -243,7 +243,7 @@ HELP_TEXTS = {
 
 
 ABOUT_TEXTS = {
-    'ru': """🔰 CIADPI Advanced Indicator v1.5
+    'ru': """🔰 CIADPI Advanced Indicator v1.6
 
     📡 Продвинутый индикатор для управления сервисом обхода DPI
 
@@ -275,7 +275,7 @@ ABOUT_TEXTS = {
 
     💻 РАЗРАБОТЧИК: Templard
 """,
-    'en': """🔰 CIADPI Advanced Indicator v1.5
+    'en': """🔰 CIADPI Advanced Indicator v1.6
 
     📡 Advanced tray indicator for managing a DPI bypass service
 
