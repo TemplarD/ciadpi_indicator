@@ -3,192 +3,242 @@
 """Полные тексты справки и «О программе» на RU и EN."""
 
 HELP_TEXTS = {
-    'ru': """📚 CIADPI Advanced Indicator — Полная справка
+    'ru': '''📚 CIADPI Advanced Indicator — Полная справка
 
     🎯 ОСНОВНЫЕ ВОЗМОЖНОСТИ:
 
     🛠️ Управление сервисом:
     • Запуск/остановка/перезапуск сервиса CIADPI
     • Мониторинг статуса в реальном времени
-    • Применение параметров вручную или через поиск стратегии
+    • Проверка параметров перед применением (dry-run бинарником)
 
     🔌 Умное управление прокси:
-    • Автоматическая настройка системного прокси
-    • Резервное копирование оригинальных настроек
-    • Восстановление настроек при остановке
+    • ciadpi — SOCKS4/5-прокси на 127.0.0.1:1080
+    • Режимы: системный (manual), локальный (не трогает систему)
+    • Резервное копирование и восстановление настроек GNOME
     • Поддержка белого списка доменов
-    • Локальный режим без изменения системных настроек
 
     ⚡ Оптимизация параметров:
-    • Встроенная проверка параметров CIADPI
-    • Конструктор параметров с регуляторами (меню «Конструктор»)
+    • Конструктор с подробными подсказками «?» по каждому параметру
     • Поиск стратегии перебором (меню «Поиск стратегии»)
-    • Готовые примеры конфигураций
+    • Готовые проверенные примеры конфигураций
     • История тестирования
+
+    ⭐ ГЛАВНЫЙ ПРИНЦИП РАБОТЫ:
+
+    Параметры ДЕСИНХРОНИЗАЦИИ (обхода), указанные ПОСЛЕ -A,
+    применяются ТОЛЬКО при признаках блокировки (сброс соединения,
+    таймаут, ошибка TLS). Обычные сайты проходят через прокси
+    БЕЗ ИСКАЖЕНИЙ. Поэтому правильный шаблон:
+
+        -T3 -A torst -o1 -o25+s -r 1+s
+        └─┬─┘ └──┬───┘ └──────┬──────┘
+        таймаут триггер   методы обхода
+                      (только при блокировке!)
+
+    Методы, стоящие ДО -A, применяются ко ВСЕМ соединениям
+    без разбора и часто ломают незаблокированные сайты.
 
     📋 ПАРАМЕТРЫ CIADPI (ОСНОВНЫЕ):
 
-    -i IP        целевой IP прослушивания (default 0.0.0.0)
-    -p PORT      порт локального прокси (default 1080)
+    -i IP        IP прослушивания (по умолчанию 0.0.0.0 — все)
+    -p PORT      порт локального SOCKS-прокси (по умолчанию 1080)
     -D           демонизация (фоновый режим)
     -w FILE      файл PID
     -E           прозрачный режим прокси
-    -c COUNT     лимит соединений (default 512)
+    -c COUNT     лимит одновременных соединений (по умолчанию 512)
     -N           запретить резолвинг доменов
-    -U           запретить UDP
-    -I IP        IP исходящих соединений (default ::)
-    -b SIZE      размер буфера (default 16384)
-    -x LEVEL     уровень отладки 0/1/2
+    -U           запретить UDP-ассоциации
+    -I IP        IP для исходящих соединений (по умолчанию ::)
+    -b SIZE      размер буфера (по умолчанию 16384)
+    -x LEVEL     уровень отладки: 0 — нет, 1 — базовый, 2 — подробно
     -g TTL       TTL для всех исходящих соединений
     -F           TCP Fast Open
 
     АВТОМАТИЧЕСКИЙ РЕЖИМ:
-    -T SEC       таймаут ожидания ответа до срабатывания auto
-    -A MODE      триггер: torst, redirect, ssl_err, none, conn
-    -L MODE      поведение после триггера: s, o, n (можно через запятую:
-                 s=кешировать, o=переподключать, n=не переподключать)
-    -u SEC       TTL кэша подобранных параметров для IP
+    -T SEC       ждать ответа N сек, затем сработает авто-режим.
+                 Формат: сек[:пауза:счётчик:байты]
+    -A MODE      ТРИГГЕР: torst (сброс/таймаут), ssl_err (ошибка TLS),
+                 redirect (подмена ответа), conn (нет соединения),
+                 none (всегда). Несколько через запятую: torst,ssl_err.
+                 ⭐ Всё, что ПОСЛЕ -A, применяется только при триггере!
+    -L MODE      поведение после триггера — ТОЛЬКО БУКВЫ:
+                 s — кешировать рабочие параметры для IP,
+                 o — переподключаться при срабатывании,
+                 n — не переподключаться.
+                 Комбинации через запятую: s,o. Цифры 0..3 не работают!
+    -u SEC       TTL кэша подобранных параметров для IP (86400=сутки)
+    -y FILE      дамп кэша в файл (-y - в stdout)
 
     ФИЛЬТРЫ:
     -K LIST      протоколы: t(tls) h(http) u(udp) i(ipv4), пример: t,h
-    -H FILE|:STR белый список хостов
+    -H FILE|:STR белый список хостов (файл или :строка)
     -j FILE|:STR белый список IP
-    -V RANGE     диапазон портов, например 80-443
-    -R N         номер запроса для применения обхода, например 1 или 1-3
+    -V RANGE     диапазон портов назначения, например 80-443
+    -R N         номер запроса для обхода, например 1 или 1-3
 
-    МЕТОДЫ ОБХОДА (desync):
-    -s POS       split — разделение пакета на позиции;
-                 формат: смещение[:повторы:шаг]+флаги;
-                 флаги: +s(SNI) +h(HTTP host) +n(null) +e(end) +m(middle)
-    -d POS       disorder — отправка частей в обратном порядке
-    -o POS       OOB — отправка как out-of-band данных
+    МЕТОДЫ ОБХОДА (desync) — ПОВТОРЯЕМЫЕ, через пробел:
+    Формат позиции: смещение[:повторы[:шаг]]+флаги
+    Первый флаг: +s — от SNI, +h — от HTTP Host, +n — нуль-байт.
+    Второй (опционально): +e — от конца, +m — середина,
+    +r — случайно, +s — от начала.
+    -s POS       split — разрезать пакет на позиции
+    -d POS       disorder — разрезать и отправить части в обратном порядке
+    -o POS       oob — разрезать, первую часть отправить как OOB-данные.
+                 ⚠️ -oN это позиция, а НЕ «метод №N»: -o1 -o25+s —
+                 два разреза (на 1-м байте и 25-м от SNI)
     -q POS       disoob — обратный порядок + OOB
-    -f POS       fake — отправка поддельного пакета перед настоящим
-    -oN          числовые методы обхода: -o1 … -o25;
-                 суффикс после + обязан начинаться с s/h/n,
-                 например: -o1 -o25+s -o10+sm
+    -f POS       fake — отправить поддельный пакет перед настоящим
+                 (TTL подделки: -t, содержимое: -l, -n, -Q)
+    -r POS       tlsrec — разбить TLS-запись (ClientHello) на части.
+                 Классика: -r 1+s — разрез внутри SNI
 
     FAKE-ПАКЕТЫ И МОДИФИКАЦИИ:
-    -t TTL       TTL fake-пакетов (default 8)
-    -S           добавлять MD5 Signature к fake-пакетам
-    -n STR       подмена SNI в fake (? = случайная буква, # = цифра)
+    -t TTL       TTL fake-пакетов (по умолчанию 8, обычно 2–8)
+    -S           MD5 Signature к fake-пакетам
+    -n STR       подмена SNI в fake (? — случайная буква, # — цифра)
     -O POS       смещение начала fake-данных
     -l FILE|:STR кастомные fake-данные
     -Q FLAG      модификация fake TLS: rand, orig, msize=N
     -e CHAR      кастомный OOB-байт
-    -M LIST      модификация HTTP: h(hcsmix) d(dcsmix) r(rmspace), пример: h,d
-    -r POS       разбиение TLS record на позиции
+    -M LIST      модификация HTTP: h(hcsmix) d(dcsmix) r(rmspace)
     -m VER       минорная версия TLS
-    -a COUNT     количество UDP-fake (default 0)
+    -a COUNT     количество UDP-fake (по умолчанию 0)
     -Y           отбрасывать пакеты с SACK
 
-    ПРИМЕРЫ РАБОЧИХ КОНФИГУРАЦИЙ:
-    (desync-методы — ПОСЛЕ -A: применяются только при блокировке,
-     сайты без блокировки идут напрямую без искажений)
-    • -T3 -A torst -o1 -o25+s -r 1+s
+    ПРИМЕРЫ РАБОЧИХ КОНФИГУРАЦИЙ (проверены на byedpi):
+    • -T3 -A torst -o1 -o25+s -r 1+s   (умолчание: разрезы только
+      при блокировке, обычные сайты идут чисто)
     • -T2 -A torst -o2 -o15+s -r 2+s
-    • -T3 -A torst -o3 -o20+s -r 2+s
+    • -T1 -A torst -o1 -o5+s
 
     💡 СОВЕТЫ:
-    • Используйте примеры для быстрого старта
-    • Включите автоотключение прокси для ноутбуков
-    • Настройте белый список для локальных ресурсов
-    • Проверяйте логи при возникновении проблем
+    • Если сайты перестали открываться — проверьте лог: «unreach ip»
+      значит провайдер отбивает OOB-пакеты, уберите -oN-методы
+    • Конструктор (меню «Конструктор») правит каждый параметр
+      отдельно, со справкой «?» по каждому
+    • Поиск стратегии подбирает параметры автоматически
+    • Белый список исключает домены из проксирования
     • Обновляйте byedpi через меню при выходе новых версий
-""",
-    'en': """📚 CIADPI Advanced Indicator — Full Reference
+''',
+    'en': '''📚 CIADPI Advanced Indicator — Full Reference
 
     🎯 CORE FEATURES:
 
     🛠️ Service control:
     • Start/stop/restart of the CIADPI service
     • Real-time status monitoring
-    • Apply parameters manually or via strategy search
+    • Parameter validation before applying (binary dry-run)
 
     🔌 Smart proxy management:
-    • Automatic system proxy configuration
-    • Backup of original settings
-    • Restore on stop
+    • ciadpi is a SOCKS4/5 proxy at 127.0.0.1:1080
+    • Modes: system (manual), local (system untouched)
+    • Backup and restore of GNOME proxy settings
     • Domain whitelist support
-    • Local mode without touching system settings
 
     ⚡ Parameter tuning:
-    • Built-in CIADPI parameter validation
-    • Parameter builder with controls (Builder menu)
-    • Brute-force strategy search (Strategy search menu)
-    • Ready-made configuration examples
+    • Builder with detailed "?" hints for every parameter
+    • Brute-force strategy search (menu "Strategy search")
+    • Ready-made verified configuration examples
     • Test history
+
+    ⭐ THE KEY OPERATING PRINCIPLE:
+
+    Desync (bypass) parameters placed AFTER -A apply ONLY when
+    blocking is detected (connection reset, timeout, TLS error).
+    Regular sites pass through the proxy UNTOUCHED. Hence the
+    correct template:
+
+        -T3 -A torst -o1 -o25+s -r 1+s
+        └─┬─┘ └──┬───┘ └──────┬──────┘
+        timeout trigger   bypass methods
+                    (only when blocked!)
+
+    Methods placed BEFORE -A apply to EVERY connection
+    indiscriminately and often break unblocked sites.
 
     📋 CIADPI PARAMETERS (MAIN):
 
-    -i IP        listening IP (default 0.0.0.0)
-    -p PORT      local proxy port (default 1080)
+    -i IP        listening IP (default 0.0.0.0 — all)
+    -p PORT      local SOCKS proxy port (default 1080)
     -D           daemonize
     -w FILE      PID file
     -E           transparent proxy mode
-    -c COUNT     connection limit (default 512)
+    -c COUNT     concurrent connection limit (default 512)
     -N           deny domain resolving
-    -U           deny UDP
+    -U           deny UDP associations
     -I IP        outgoing bind IP (default ::)
     -b SIZE      buffer size (default 16384)
-    -x LEVEL     debug level 0/1/2
+    -x LEVEL     debug level: 0 — none, 1 — basic, 2 — verbose
     -g TTL       TTL for all outgoing connections
     -F           TCP Fast Open
 
     AUTOMATIC MODE:
-    -T SEC       response timeout before auto triggers
-    -A MODE      trigger: torst, redirect, ssl_err, none, conn
-    -L MODE      post-trigger behaviour: s, o, n (comma-separated:
-                 s=cache, o=reconnect, n=no reconnect)
-    -u SEC       per-IP desync params cache TTL
+    -T SEC       wait N seconds for a reply, then auto triggers.
+                 Format: sec[:pause:counter:bytes]
+    -A MODE      TRIGGER: torst (reset/timeout), ssl_err (TLS error),
+                 redirect (replaced reply), conn (no connection),
+                 none (always). Several comma-separated: torst,ssl_err.
+                 ⭐ Everything AFTER -A applies only on trigger!
+    -L MODE      post-trigger behaviour — LETTERS ONLY:
+                 s — cache working params for the IP,
+                 o — reconnect on trigger,
+                 n — do not reconnect.
+                 Combinations comma-separated: s,o. Digits 0..3 DO NOT work!
+    -u SEC       per-IP cached params TTL (86400 = a day)
+    -y FILE      dump cache to a file (-y - to stdout)
 
     FILTERS:
     -K LIST      protocols: t(tls) h(http) u(udp) i(ipv4), e.g.: t,h
-    -H FILE|:STR hosts whitelist
+    -H FILE|:STR hosts whitelist (file or :string)
     -j FILE|:STR IP whitelist
-    -V RANGE     port range, e.g. 80-443
-    -R N         request number to apply desync to, e.g. 1 or 1-3
+    -V RANGE     destination port range, e.g. 80-443
+    -R N         request number for the bypass, e.g. 1 or 1-3
 
-    DESYNC METHODS:
-    -s POS       split — split the packet at position;
-                 format: offset[:repeats:step]+flags;
-                 flags: +s(SNI) +h(HTTP host) +n(null) +e(end) +m(middle)
-    -d POS       disorder — send parts in reverse order
-    -o POS       OOB — send as out-of-band data
+    DESYNC METHODS — REPEATABLE, space-separated:
+    Position format: offset[:repeats[:step]]+flags
+    First flag: +s — from SNI, +h — from HTTP Host, +n — null byte.
+    Second (optional): +e — from end, +m — middle,
+    +r — random, +s — from start.
+    -s POS       split — cut the packet at a position
+    -d POS       disorder — cut and send parts in reverse order
+    -o POS       oob — cut, send the first part as OOB data.
+                 ⚠️ -oN is a position, NOT "method #N": -o1 -o25+s
+                 means two cuts (byte 1 and 25 from SNI)
     -q POS       disoob — reverse order + OOB
     -f POS       fake — send a fake packet before the real one
-    -oN          numeric desync methods: -o1 … -o25;
-                 the suffix after + must start with s/h/n,
-                 e.g.: -o1 -o25+s -o10+sm
+                 (fake TTL: -t, content: -l, -n, -Q)
+    -r POS       tlsrec — split the TLS record (ClientHello).
+                 Classic: -r 1+s — cut inside the SNI
 
     FAKE PACKETS & MODIFICATIONS:
-    -t TTL       fake packet TTL (default 8)
-    -S           add MD5 Signature option to fakes
-    -n STR       replace SNI in fake (? = random letter, # = random digit)
+    -t TTL       fake packet TTL (default 8, usually 2–8)
+    -S           add MD5 Signature to fakes
+    -n STR       replace SNI in the fake (? — random letter, # — digit)
     -O POS       fake data start offset
     -l FILE|:STR custom fake data
     -Q FLAG      fake TLS modification: rand, orig, msize=N
     -e CHAR      custom OOB byte
-    -M LIST      HTTP modification: h(hcsmix) d(dcsmix) r(rmspace), e.g.: h,d
-    -r POS       TLS record splitting at position
+    -M LIST      HTTP modification: h(hcsmix) d(dcsmix) r(rmspace)
     -m VER       TLS minor version
     -a COUNT     UDP fakes count (default 0)
-    -Y           drop packets with SACK extension
+    -Y           drop packets with SACK
 
-    WORKING CONFIGURATION EXAMPLES:
-    (desync methods go AFTER -A: applied only on blocking,
-     unblocked sites pass through untouched)
-    • -T3 -A torst -o1 -o25+s -r 1+s
+    WORKING CONFIGURATION EXAMPLES (verified on byedpi):
+    • -T3 -A torst -o1 -o25+s -r 1+s   (default: cuts only on
+      blocking, regular sites stay clean)
     • -T2 -A torst -o2 -o15+s -r 2+s
-    • -T3 -A torst -o3 -o20+s -r 2+s
+    • -T1 -A torst -o1 -o5+s
 
     💡 TIPS:
-    • Use examples for a quick start
-    • Enable proxy auto-disable on laptops
-    • Set up a whitelist for local resources
-    • Check logs when troubleshooting
+    • If sites stopped opening — check the log: "unreach ip"
+      means the ISP rejects OOB packets, remove the -oN methods
+    • The Builder menu edits each parameter separately,
+      with a "?" reference for each
+    • Strategy search picks parameters automatically
+    • The whitelist excludes domains from proxying
     • Update byedpi from the menu when new versions come out
-"""
+''',
 }
 
 

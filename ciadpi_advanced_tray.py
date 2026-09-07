@@ -40,14 +40,20 @@ except ImportError:
     HELP_TEXTS, ABOUT_TEXTS = {}, {}
 
 try:
-    from ciadpi_params_spec import CONTROLS, parse_params, get_value, build_params, HELP_SECTIONS
+    from ciadpi_params_spec import (CONTROLS, parse_params, get_value,
+                                     build_params, HELP_SECTIONS,
+                                     update_param_in_string)
     PARAMS_SPEC_AVAILABLE = True
 except ImportError:
     PARAMS_SPEC_AVAILABLE = False
     CONTROLS = []
-    def parse_params(s): return {}
-    def get_value(d, k): return None
-    def build_params(w): return ''
+    def parse_params(params_str): return {}
+    def get_value(parsed, opt):
+        return None
+    def build_params(widgets):
+        return ''
+    def update_param_in_string(params_str, opt, value, group=None):
+        return str(params_str)
     HELP_SECTIONS = {}
 
 try:
@@ -2621,7 +2627,13 @@ class AdvancedTrayIndicator:
     # ================= КОНСТРУКТОР ПАРАМЕТРОВ =================
 
     def show_param_builder(self, widget=None):
-        """Окно-конструктор: все параметры ciadpi регуляторами + строка."""
+        """Окно-конструктор: хирургическое редактирование параметров.
+
+        Каждое поле правит ТОЛЬКО свой флаг в строке (update_param_in_string),
+        не пересобирая её целиком — порядок и прочие параметры сохраняются.
+        «?» показывает подробную подсказку по конкретному параметру
+        (не зависящую от полной справки), на языке интерфейса.
+        """
         if not PARAMS_SPEC_AVAILABLE:
             self.show_notification(t('notif.error'),
                                    "ciadpi_params_spec.py не найден")
@@ -2663,68 +2675,59 @@ class AdvancedTrayIndicator:
         widgets = {}          # opt -> виджет
         updating = {'lock': False}   # защита от рекурсии
 
-        def collect_values():
-            """Собрать строку из всех регуляторов."""
-            vals = {}
-            for spec in CONTROLS:
-                w = widgets.get(spec['opt'])
-                if w is None:
-                    continue
-                kind = spec['kind']
-                if kind == 'spin':
-                    v = int(w.get_value())
-                    vals[spec['opt']] = v if v != 0 or spec['default'] == 0 else None
-                    # 0 в spin = "не использовать" для опциональных
-                    if spec.get('default') is not None and v == spec['default'] \
-                            and spec['opt'] != '-p':
-                        pass  # дефолт тоже добавляем явно — безопасно
-                    if v == 0 and spec['opt'] in ('-T', '-u', '-a', '-x'):
-                        continue  # 0 = выключено, не добавляем
-                    if v == 1080 and spec['opt'] == '-p':
-                        vals[spec['opt']] = 1080  # порт всегда показываем
-                elif kind == 'entry' or kind == 'combo':
-                    txt = w.get_text().strip() if kind == 'entry' else \
-                        (w.get_active_id() or '')
-                    if txt:
-                        vals[spec['opt']] = txt
-                elif kind == 'check':
-                    if w.get_active():
-                        vals[spec['opt']] = True
-            return vals
-
-        def refresh_string_from_widgets(*_):
+        def apply_field_change(spec, value):
+            """Хирургическая правка одного флага в строке."""
             if updating['lock']:
                 return
-            vals = collect_values()
-            new_str = build_params(vals)
             updating['lock'] = True
-            str_entry.set_text(new_str)
-            updating['lock'] = False
+            try:
+                cur = str_entry.get_text()
+                new = update_param_in_string(cur, spec['opt'], value,
+                                            group=spec['group'])
+                str_entry.set_text(new)
+            finally:
+                updating['lock'] = False
+
+        def on_widget_change(spec, w):
+            """Собрать значение виджета и применить правку."""
+            kind = spec['kind']
+            if kind == 'spin':
+                v = int(w.get_value())
+                value = None if v == 0 and spec.get('default') is None else v
+            elif kind == 'combo':
+                value = w.get_active_id() or ''
+            elif kind == 'check':
+                value = True if w.get_active() else None
+            else:  # entry
+                value = w.get_text().strip() or None
+            apply_field_change(spec, value)
 
         def refresh_widgets_from_string(*_):
             if updating['lock']:
                 return
             parsed_now = parse_params(str_entry.get_text())
             updating['lock'] = True
-            for spec in CONTROLS:
-                w = widgets.get(spec['opt'])
-                if w is None:
-                    continue
-                val = get_value(parsed_now, spec['opt'])
-                kind = spec['kind']
-                try:
-                    if kind == 'spin':
-                        w.set_value(float(val) if val else 0)
-                    elif kind == 'entry':
-                        w.set_text(val or '')
-                        w.set_position(-1)
-                    elif kind == 'combo':
-                        w.set_active_id(val if val else '')
-                    elif kind == 'check':
-                        w.set_active(bool(val))
-                except Exception:
-                    pass
-            updating['lock'] = False
+            try:
+                for spec in CONTROLS:
+                    w = widgets.get(spec['opt'])
+                    if w is None:
+                        continue
+                    val = get_value(parsed_now, spec['opt'])
+                    kind = spec['kind']
+                    try:
+                        if kind == 'spin':
+                            w.set_value(float(val) if val else 0)
+                        elif kind == 'entry':
+                            w.set_text(val or '')
+                            w.set_position(-1)
+                        elif kind == 'combo':
+                            w.set_active_id(val if val else '')
+                        elif kind == 'check':
+                            w.set_active(bool(val))
+                    except Exception:
+                        pass
+            finally:
+                updating['lock'] = False
 
         current_group = None
         group_frames = {}
@@ -2742,15 +2745,26 @@ class AdvancedTrayIndicator:
 
             row_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
 
-            title = Gtk.Label(label=t(spec['key']))
+            key = spec['key']
+            detailed = t(key + '_q')  # подробная подсказка «?»
+            short = t(key + '_h')     # краткая (на label и виджет)
+
+            title = Gtk.Label(label=t(key))
             title.set_xalign(0)
             title.set_size_request(230, -1)
-            title.set_tooltip_text(t(spec['key'] + '_h'))
+            title.set_tooltip_text(short)
             row_box.pack_start(title, False, False, 0)
 
             kind = spec['kind']
             opt = spec['opt']
-            val = get_value(parsed, opt) if opt != '-oN' else None
+            val = get_value(parsed, opt)
+
+            # «?» — подробная подсказка по параметру (не открывает справку)
+            q_btn = Gtk.Button(label='?')
+            q_btn.set_size_request(28, 28)
+            q_btn.set_tooltip_text(t('builder.q_tooltip'))
+            q_btn.connect("clicked",
+                          lambda b, msg=detailed: self._show_param_tip(msg))
 
             if kind == 'spin':
                 lo, hi, step = spec['min'], spec['max'], spec['step']
@@ -2759,46 +2773,38 @@ class AdvancedTrayIndicator:
                     w.set_value(float(val) if val else 0)
                 except Exception:
                     w.set_value(0)
-                w.set_tooltip_text(t(spec['key'] + '_h'))
-                # кнопка «?» — переход к полной справке
-                q_btn = Gtk.Button(label='?')
-                q_btn.set_size_request(28, 28)
-                q_btn.set_tooltip_text('Справка')
-                section = HELP_SECTIONS.get(spec['group'], '')
-                q_btn.connect("clicked", lambda b, s=section: self._open_help_section(s))
+                w.set_tooltip_text(short)
                 row_box.pack_start(w, False, False, 0)
                 row_box.pack_start(q_btn, False, False, 0)
-                w.connect("value-changed", refresh_string_from_widgets)
+                w.connect("value-changed", lambda _, s=spec: on_widget_change(s, w))
 
             elif kind == 'entry':
                 w = Gtk.Entry()
                 w.set_text(val or '')
                 w.set_placeholder_text(spec.get('placeholder', ''))
-                w.set_tooltip_text(t(spec['key'] + '_h'))
+                w.set_tooltip_text(short)
                 w.set_hexpand(True)
-                q_btn = Gtk.Button(label='?')
-                q_btn.set_size_request(28, 28)
-                section = HELP_SECTIONS.get(spec['group'], '')
-                q_btn.connect("clicked", lambda b, s=section: self._open_help_section(s))
                 row_box.pack_start(w, True, True, 0)
                 row_box.pack_start(q_btn, False, False, 0)
-                w.connect("changed", refresh_string_from_widgets)
+                w.connect("changed", lambda _, s=spec: on_widget_change(s, w))
 
             elif kind == 'combo':
                 w = Gtk.ComboBoxText()
                 for v_id, v_label in spec['variants']:
                     w.append(v_id, v_label)
                 w.set_active_id(val if val else '')
-                w.set_tooltip_text(t(spec['key'] + '_h'))
+                w.set_tooltip_text(short)
                 row_box.pack_start(w, False, False, 0)
-                w.connect("changed", refresh_string_from_widgets)
+                row_box.pack_start(q_btn, False, False, 0)
+                w.connect("changed", lambda _, s=spec: on_widget_change(s, w))
 
             elif kind == 'check':
                 w = Gtk.CheckButton()
                 w.set_active(bool(val))
-                w.set_tooltip_text(t(spec['key'] + '_h'))
+                w.set_tooltip_text(short)
                 row_box.pack_start(w, False, False, 0)
-                w.connect("toggled", refresh_string_from_widgets)
+                row_box.pack_start(q_btn, False, False, 0)
+                w.connect("toggled", lambda _, s=spec: on_widget_change(s, w))
 
             widgets[opt] = w
             group_frames[gkey].pack_start(row_box, False, False, 0)
@@ -2829,11 +2835,28 @@ class AdvancedTrayIndicator:
 
         dialog.destroy()
 
-    def _open_help_section(self, section):
-        """Открыть полную справку и подсказать нужный раздел."""
-        self.show_help(None)
-        self.show_notification('❓ ' + t('menu.help'),
-                               (t('builder.help_section') + " " + section) if section else '')
+    def _show_param_tip(self, message):
+        """Диалог подробной подсказки по одному параметру конструктора."""
+        dialog = Gtk.Dialog(title=t('builder.tip_title'), flags=0)
+        dialog.add_buttons(Gtk.STOCK_OK, Gtk.ResponseType.OK)
+        dialog.set_default_size(520, 260)
+
+        content = dialog.get_content_area()
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_vexpand(True)
+        label = Gtk.Label(label=message)
+        label.set_xalign(0)
+        label.set_valign(Gtk.Align.START)
+        label.set_line_wrap(True)
+        label.set_margin_top(10); label.set_margin_bottom(10)
+        label.set_margin_start(12); label.set_margin_end(12)
+        label.set_selectable(True)
+        scrolled.add(label)
+        content.pack_start(scrolled, True, True, 0)
+        content.show_all()
+
+        dialog.run()
+        dialog.destroy()
 
     # ================= /КОНСТРУКТОР ПАРАМЕТРОВ =================
 
