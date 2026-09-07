@@ -256,8 +256,8 @@ class AdvancedTrayIndicator:
     def save_config(self):
         """Сохранение конфигурации в файл"""
         try:
-            # СОХРАНЯЕМ ФЛАГ В КОНФИГ
-            self.current_params["we_changed_proxy"] = self.we_changed_proxy
+            # СОХРАНЯЕМ ФЛАГ В КОНФИГ (getattr — защиту от вызовов до init)
+            self.current_params["we_changed_proxy"] = getattr(self, "we_changed_proxy", False)
             
             with open(self.config_file, 'w', encoding='utf-8') as f:
                 json.dump(self.current_params, f, indent=2, ensure_ascii=False)
@@ -416,7 +416,7 @@ class AdvancedTrayIndicator:
         """Диалог одноразовой настройки беспарольного управления сервисом."""
         script_src = Path(__file__).resolve()
         dialog = Gtk.Dialog(title="Права доступа CIADPI", flags=0)
-        dialog.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL)
+        dialog.add_buttons(t('btn.cancel'), Gtk.ResponseType.CANCEL)
         dialog.set_default_size(560, 300)
 
         box = dialog.get_content_area()
@@ -560,6 +560,20 @@ class AdvancedTrayIndicator:
         """Обновление параметров в systemd сервисе - УНИВЕРСАЛЬНАЯ ВЕРСИЯ"""
         try:
             print(f"🔄 Обновление параметров: {new_params}")
+
+            # ⭐ СОХРАНЕНИЕ ПОРТА СЕРВИСА: параметры из «Поиска стратегии»
+            # и истории приходят БЕЗ -p (тестируются на 1081). Без этого
+            # сервис падал на дефолтный 1080, а системный прокси смотрел
+            # на порт из конфига — браузер уходил в пустоту.
+            try:
+                parsed_new = parse_params(new_params)
+                if get_value(parsed_new, '-p') is None:
+                    cfg_port = str(self.current_params.get('proxy_port', '') or '').strip()
+                    if cfg_port.isdigit():
+                        new_params = update_param_in_string(new_params, '-p', int(cfg_port))
+                        print(f"🔌 Порт сохранён из конфига: -p {cfg_port}")
+            except Exception as e:
+                print(f"⚠️ Сохранение порта пропущено: {e}")
 
             # ⭐ PRE-FLIGHT: синтаксис + живой бинарник, ДО записи в юнит.
             # Невалидные параметры = вечный crash-loop юнита (Restart=on-failure).
@@ -818,8 +832,8 @@ class AdvancedTrayIndicator:
             ###
             """Диалог управления белым списком"""
             dialog = Gtk.Dialog(title=t('wl.title'), flags=0)
-            dialog.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
-                            Gtk.STOCK_OK, Gtk.ResponseType.OK)
+            dialog.add_buttons(t('btn.cancel'), Gtk.ResponseType.CANCEL,
+                            t('btn.ok'), Gtk.ResponseType.OK)
             dialog.set_default_size(600, 500)
 
             content_area = dialog.get_content_area()
@@ -1184,8 +1198,8 @@ class AdvancedTrayIndicator:
         current_settings = self.get_system_proxy_settings()
 
         dialog = Gtk.Dialog(title=t('proxy.title'), flags=0)
-        dialog.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
-                        Gtk.STOCK_OK, Gtk.ResponseType.OK)
+        dialog.add_buttons(t('btn.cancel'), Gtk.ResponseType.CANCEL,
+                        t('btn.ok'), Gtk.ResponseType.OK)
         dialog.set_default_size(500, 420)
 
         content_area = dialog.get_content_area()
@@ -1276,6 +1290,18 @@ class AdvancedTrayIndicator:
         sys_host = current_settings.get('http_host', '')
         sys_port = current_settings.get('http_port', '')
 
+        # ⭐ ЖИВАЯ ПРОБА ПОРТА: слушает ли сервис этот порт прямо сейчас
+        # (диагностика «прокси применён, но не отвечает»)
+        probe_host = saved_host if saved_host else '127.0.0.1'
+        try:
+            import socket as _socket
+            _s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+            _s.settimeout(0.8)
+            port_alive = _s.connect_ex((probe_host, int(saved_port))) == 0
+            _s.close()
+        except Exception:
+            port_alive = False
+
         status_lines = [
             f"💾 {t('proxy.saved_state')}: {cfg_mode_name}  →  {cfg_host_disp}:{saved_port}",
         ]
@@ -1291,6 +1317,12 @@ class AdvancedTrayIndicator:
                 status_lines.append("⚠️ " + t('proxy.not_applied'))
         elif saved_mode == 'none':
             status_lines.append("✅ " + t('proxy.applied_ok'))
+
+        # ⭐ Результат живой пробы — сразу видно, отвечает ли порт
+        status_lines.append(
+            ("🟢 " if port_alive else "🔴 ")
+            + f"{probe_host}:{saved_port} "
+            + ("порт отвечает — сервис слушает" if port_alive else "порт НЕ отвечает — сервис не запущен или слушает другой порт"))
 
         status_label = Gtk.Label(label="\n".join(status_lines))
         status_label.set_xalign(0)
@@ -1395,10 +1427,28 @@ class AdvancedTrayIndicator:
             # Во всех остальных случаях применяем выбранный режим к системе.
             apply_result = None
             if not restored_original:
-                apply_result = self.apply_system_proxy(
-                    selected_mode if selected_mode in ('manual', 'auto', 'none')
-                    else 'none',
-                    proxy_host, proxy_port)
+                apply_mode = selected_mode if selected_mode in ('manual', 'auto', 'none') else 'none'
+
+                # ⭐ MANUAL/LOCAL: сервис обязан работать и слушать именно
+                # этот порт — иначе браузер уходит на мёртвый адрес
+                # (баг: сервис без -p слушал 1080, gsettings — 8080).
+                if selected_mode in ('manual', 'local'):
+                    if self._ensure_service_running_for_proxy():
+                        self._sync_service_port_with_proxy(proxy_port)
+
+                # ⭐ AUTO (PAC) без URL = сломанный прокси. GNOME показывает
+                # «Автоматический», но PAC пуст — сеть не работает вовсе.
+                if apply_mode == 'auto':
+                    pac_url = (current_settings.get('pac_url') or '').strip()
+                    if not pac_url:
+                        print("⚠️ PAC URL пуст — авто-режим сломает сеть, применяю manual")
+                        self.show_notification(
+                            t('notif.warning'),
+                            "PAC URL не задан — применён ручной режим (auto без PAC не работает)",
+                            category='proxy')
+                        apply_mode = 'manual'
+
+                apply_result = self.apply_system_proxy(apply_mode, proxy_host, proxy_port)
 
             # ⭐ УВЕДОМЛЕНИЕ С РЕАЛЬНЫМ РЕЗУЛЬТАТОМ
             if restored_original:
@@ -1415,6 +1465,65 @@ class AdvancedTrayIndicator:
                                        t('proxy.apply_failed'), category='proxy')
 
         dialog.destroy()
+
+    def _sync_service_port_with_proxy(self, proxy_port):
+        """Синхронизирует порт ciadpi в юните с портом прокси из диалога.
+
+        ⭐ Раньше «Поиск стратегии» применял комбинации БЕЗ -p:
+        сервис слушал дефолтный 1080, а системный прокси указывал
+        на 127.0.0.1:8080 из конфига — браузер ходил в пустоту.
+        Здесь: если в текущих параметрах юнита нет -p (или он другой)
+        и юнит запущен — дописываем/меняем -p через update_param_in_string
+        и перезапускаем сервис.
+        Возвращает True, если сервис уже слушает нужный порт.
+        """
+        try:
+            port = str(proxy_port).strip()
+            if not port.isdigit():
+                return False
+
+            # Текущая строка параметров юнита
+            params_str = self.get_current_service_params() or ''
+            parsed = parse_params(params_str)
+            cur_port = get_value(parsed, '-p')
+
+            if cur_port and str(cur_port) == port:
+                return True  # уже синхронно
+
+            print(f"🔌 Порт сервиса ({cur_port or 'default 1080'}) != порт прокси ({port}) — синхронизирую")
+            new_params = update_param_in_string(params_str, '-p', int(port))
+            ok = self.update_service_params(new_params, apply_proxy=False)
+            if ok:
+                print(f"✅ Сервис перезапущен с -p {port}")
+            return ok
+        except Exception as e:
+            print(f"⚠️ Синхронизация порта не удалась: {e}")
+            return False
+
+    def _ensure_service_running_for_proxy(self):
+        """Для manual/local-режима прокси сервис обязан работать.
+
+        ⭐ Раньше можно было включить системный прокси при остановленном
+        сервисе — gsettings указывали на мёртвый порт.
+        Возвращает True если сервис active (запущен при необходимости).
+        """
+        try:
+            r = subprocess.run(['systemctl', 'is-active', 'ciadpi.service'],
+                               capture_output=True, text=True, timeout=3)
+            if r.stdout.strip() == 'active':
+                return True
+            print("▶️ Прокси-режим требует сервис — запускаю ciadpi.service")
+            ok, err = self._systemctl('start', 'ciadpi.service')
+            if not ok:
+                print(f"❌ Не удалось запустить сервис: {err}")
+                self.show_notification(t('notif.error'),
+                                       f"ciadpi.service: {err}", category='service')
+                return False
+            time.sleep(2)
+            return True
+        except Exception as e:
+            print(f"⚠️ Проверка сервиса: {e}")
+            return False
 
     def get_system_proxy_settings(self):
         """Получение текущих системных настроек прокси.
@@ -1790,6 +1899,10 @@ class AdvancedTrayIndicator:
                 host = self.current_params.get("proxy_host", "")
                 port = self.current_params.get("proxy_port", "1080")
 
+                # ⭐ ПОРТ СЕРВИСА ДОЛЖЕН СОВПАДАТЬ: сервис мог быть
+                # перезапущен «Поиском стратегии» без -p (слушает 1080)
+                self._sync_service_port_with_proxy(port)
+
                 # ⭐ БЭКАП ИСХОДНЫХ СИСТЕМНЫХ НАСТРОЕК — СТРОГО ДО apply:
                 # иначе в копию попадут наши же host/port, и «восстановление»
                 # вернёт наш прокси вместо исходного.
@@ -1959,6 +2072,8 @@ class AdvancedTrayIndicator:
 
                         host = self.current_params.get("proxy_host", "")
                         port = self.current_params.get("proxy_port", "1080")
+                        # ⭐ порт сервиса должен совпадать с портом прокси
+                        self._sync_service_port_with_proxy(port)
                         self.apply_system_proxy('manual', host, port)
                         self.show_notification(t('notif.success'), t('notif.service_started_proxy'), category='service')
                     else:
@@ -2163,8 +2278,8 @@ class AdvancedTrayIndicator:
 ###            
             """Диалог настроек параметров"""
             dialog = Gtk.Dialog(title=t('settings.dialog_title'), flags=0)
-            dialog.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
-                            Gtk.STOCK_OK, Gtk.ResponseType.OK)
+            dialog.add_buttons(t('btn.cancel'), Gtk.ResponseType.CANCEL,
+                            t('btn.ok'), Gtk.ResponseType.OK)
             dialog.set_default_size(700, 400)
 
             content_area = dialog.get_content_area()
@@ -2313,7 +2428,7 @@ class AdvancedTrayIndicator:
             return
         
         dialog = Gtk.Dialog(title=t('auto.title'), flags=0)
-        dialog.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
+        dialog.add_buttons(t('btn.cancel'), Gtk.ResponseType.CANCEL,
                          t('auto.launch'), Gtk.ResponseType.OK)
         dialog.set_default_size(400, 200)
 
@@ -2372,7 +2487,7 @@ class AdvancedTrayIndicator:
         history = self.autosearcher.get_history(20)
         
         dialog = Gtk.Dialog(title=t('hist.title'), flags=0)
-        dialog.add_buttons(Gtk.STOCK_CLOSE, Gtk.ResponseType.CLOSE)
+        dialog.add_buttons(t('btn.close'), Gtk.ResponseType.CLOSE)
         dialog.set_default_size(600, 400)
         
         content_area = dialog.get_content_area()
@@ -2416,7 +2531,7 @@ class AdvancedTrayIndicator:
         searcher = StrategySearcher()
 
         dialog = Gtk.Dialog(title=t('search.title'), flags=0)
-        dialog.add_buttons(Gtk.STOCK_CLOSE, Gtk.ResponseType.CLOSE)
+        dialog.add_buttons(t('btn.close'), Gtk.ResponseType.CLOSE)
         dialog.set_default_size(760, 560)
         self.strategy_window = dialog
 
@@ -2788,8 +2903,8 @@ class AdvancedTrayIndicator:
             return
 
         dialog = Gtk.Dialog(title=t('builder.title'), flags=0)
-        dialog.add_buttons(Gtk.STOCK_CLOSE, Gtk.ResponseType.CLOSE,
-                           Gtk.STOCK_OK, Gtk.ResponseType.OK)
+        dialog.add_buttons(t('btn.close'), Gtk.ResponseType.CLOSE,
+                           t('btn.ok'), Gtk.ResponseType.OK)
         dialog.set_default_size(860, 640)
 
         content = dialog.get_content_area()
@@ -2986,7 +3101,7 @@ class AdvancedTrayIndicator:
     def _show_param_tip(self, message):
         """Диалог подробной подсказки по одному параметру конструктора."""
         dialog = Gtk.Dialog(title=t('builder.tip_title'), flags=0)
-        dialog.add_buttons(Gtk.STOCK_OK, Gtk.ResponseType.OK)
+        dialog.add_buttons(t('btn.ok'), Gtk.ResponseType.OK)
         dialog.set_default_size(520, 260)
 
         content = dialog.get_content_area()
@@ -3017,7 +3132,7 @@ class AdvancedTrayIndicator:
 
 
         dialog = Gtk.Dialog(title=t('help.title'), flags=0)
-        dialog.add_buttons(Gtk.STOCK_OK, Gtk.ResponseType.OK)
+        dialog.add_buttons(t('btn.ok'), Gtk.ResponseType.OK)
         dialog.set_default_size(600, 500)
         
         content_area = dialog.get_content_area()
@@ -3044,7 +3159,7 @@ class AdvancedTrayIndicator:
 
 
         dialog = Gtk.Dialog(title=t('about.title'), flags=0)
-        dialog.add_buttons(Gtk.STOCK_OK, Gtk.ResponseType.OK)
+        dialog.add_buttons(t('btn.ok'), Gtk.ResponseType.OK)
         dialog.set_default_size(450, 400)
         
         content_area = dialog.get_content_area()
@@ -3141,7 +3256,7 @@ class AdvancedTrayIndicator:
     def show_app_settings(self, widget=None):
         """Диалог настроек приложения: язык, уведомления, автозапуск."""
         dialog = Gtk.Dialog(title=t('app.title'), flags=0)
-        dialog.add_buttons(Gtk.STOCK_CLOSE, Gtk.ResponseType.CLOSE)
+        dialog.add_buttons(t('btn.close'), Gtk.ResponseType.CLOSE)
         dialog.set_default_size(480, 420)
 
         box = dialog.get_content_area()

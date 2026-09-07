@@ -653,6 +653,13 @@ _STRINGS = {
     'proxy.auto_disable': {'ru': '❌ Автоматически отключать прокси при выходе', 'en': '❌ Automatically disable proxy on exit'},
     'proxy.auto_disable_h': {'ru': 'При остановке сервиса прокси будет автоматически отключен в системе',
                              'en': 'Proxy will be disabled system-wide when the service stops'},
+    # ---- Кнопки диалогов (раньше Gtk.STOCK_*: переводились системной
+    #      локалью, а не нашим i18n — «Закрыть/ОК» оставались русскими) ----
+    'btn.ok':        {'ru': 'ОК', 'en': 'OK'},
+    'btn.cancel':    {'ru': 'Отмена', 'en': 'Cancel'},
+    'btn.close':     {'ru': 'Закрыть', 'en': 'Close'},
+    'btn.apply':     {'ru': 'Применить', 'en': 'Apply'},
+
     # ---- Дополнительные ключи (v1.5) ----
     'notif.command_ok':   {'ru': 'Команда выполнена', 'en': 'Command completed'},
     'notif.service_started_proxy': {'ru': 'Сервис запущен, настройки прокси применены',
