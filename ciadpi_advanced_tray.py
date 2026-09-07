@@ -171,7 +171,9 @@ class AdvancedTrayIndicator:
             )
             
             self.indicator.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
-            self.indicator.set_menu(self.create_menu())
+            new_menu = self.create_menu()
+            self.indicator.set_menu(new_menu)
+            self._tray_menu = new_menu  # rebuild_menu заменит именно его
             
             # Устанавливаем всплывающие подсказки
             self.update_tooltip()
@@ -216,10 +218,10 @@ class AdvancedTrayIndicator:
                 ['systemctl', 'is-active', 'ciadpi.service'],
                 capture_output=True, text=True, timeout=2
             )
-            status = "🟢 Запущен" if result.stdout.strip() == 'active' else "🔴 Остановлен"
-            self.show_notification("Статус CIADPI", status)
+            status = t('quick.running') if result.stdout.strip() == 'active' else t('quick.stopped')
+            self.show_notification(t('quick.status_title'), status)
         except Exception as e:
-            self.show_notification("Ошибка", f"Не удалось проверить статус: {e}")
+            self.show_notification(t('notif.error'), f"{t('quick.err')}: {e}")
 
     def load_config(self):
         """Загрузка конфигурации из файла"""
@@ -277,16 +279,17 @@ class AdvancedTrayIndicator:
             if (self.current_params.get("proxy_enabled", False) and
                 proxy_mode == 'manual'):
 
-                # ⭐ ЕСЛИ ПРИМЕНЯЕМ НАШИ НАСТРОЙКИ - УСТАНАВЛИВАЕМ ФЛАГ
+                host = self.current_params.get("proxy_host", "")
+                port = self.current_params.get("proxy_port", "1080")
+
+                # ⭐ БЭКАП ДО ПРИМЕНЕНИЯ (не после!) — см. save_system_proxy_backup
                 if not self.we_changed_proxy:
-                    self.save_system_proxy_backup()  # Сохраняем системные настройки
+                    self.save_system_proxy_backup()
                     self.we_changed_proxy = True
                     self.current_params["we_changed_proxy"] = True
                     self.save_config()
-                    print("💾 Установлен флаг we_changed_proxy при применении настроек из конфига")
+                    print("💾 Установлен флаг we_changed_proxy, бэкап снят ДО применения")
 
-                host = self.current_params.get("proxy_host", "")
-                port = self.current_params.get("proxy_port", "1080")
                 self.apply_system_proxy('manual', host, port)
 
         except Exception as e:
@@ -435,7 +438,7 @@ class AdvancedTrayIndicator:
         info.set_line_wrap(True)
         vbox.pack_start(info, False, False, 0)
 
-        btn_apply = Gtk.Button(label="🔑 Настроить (запросит пароль один раз)")
+        btn_apply = Gtk.Button(label=t('priv.apply'))
         vbox.pack_start(btn_apply, False, False, 0)
 
         status = Gtk.Label(label="")
@@ -448,7 +451,7 @@ class AdvancedTrayIndicator:
 
         def run_setup(btn):
             btn_apply.set_sensitive(False)
-            status.set_text("Выполняется настройка... (смотрите запрос пароля)")
+            status.set_text(t('priv.running'))
 
             def work():
                 ok, msg = self._setup_privileges(script_src)
@@ -456,8 +459,8 @@ class AdvancedTrayIndicator:
                 def finish():
                     btn_apply.set_sensitive(True)
                     if ok:
-                        status.set_text("✅ Готово! Пароль больше не потребуется.")
-                        self.show_notification("Готово", "Беспарольное управление настроено")
+                        status.set_text(t('priv.done'))
+                        self.show_notification(t('priv.done_notif'), t('priv.done_notif_2'))
                     else:
                         status.set_text(f"❌ Ошибка: {msg}")
                     return False
@@ -470,10 +473,10 @@ class AdvancedTrayIndicator:
             clipboard.set_text(
                 f'pkexec env CIADPI_USER="$USER" bash '
                 f"{script_src.parent / 'ciadpi_privileges.sh'}", -1)
-            self.show_notification("Скопировано",
-                                   "Команда вставлена в буфер обмена")
+            self.show_notification(t('priv.copy_notif'),
+                                   t('priv.copy_notif_2'))
 
-        btn_copy = Gtk.Button(label="📋 Скопировать команду для терминала")
+        btn_copy = Gtk.Button(label=t('priv.copy'))
         btn_copy.connect("clicked", on_copy_cmd)
         vbox.pack_start(btn_copy, False, False, 0)
         box.show_all()
@@ -814,7 +817,7 @@ class AdvancedTrayIndicator:
         try:        
             ###
             """Диалог управления белым списком"""
-            dialog = Gtk.Dialog(title="Управление белым списком", flags=0)
+            dialog = Gtk.Dialog(title=t('wl.title'), flags=0)
             dialog.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
                             Gtk.STOCK_OK, Gtk.ResponseType.OK)
             dialog.set_default_size(600, 500)
@@ -828,21 +831,21 @@ class AdvancedTrayIndicator:
             box.set_margin_end(10)
             
             # Включение белого списка
-            enable_check = Gtk.CheckButton(label="Включить белый список")
+            enable_check = Gtk.CheckButton(label=t('wl.enable'))
             enable_check.set_active(self.whitelist.get("enabled", False))
             
             # Настройки исключений
-            exceptions_frame = Gtk.Frame(label="Исключения из проксирования")
+            exceptions_frame = Gtk.Frame(label=t('wl.exceptions'))
             exceptions_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
             exceptions_box.set_margin_top(5)
             exceptions_box.set_margin_bottom(5)
             exceptions_box.set_margin_start(5)
             exceptions_box.set_margin_end(5)
             
-            bypass_proxy_check = Gtk.CheckButton(label="Исключить из проксирования")
+            bypass_proxy_check = Gtk.CheckButton(label=t('wl.bypass_proxy'))
             bypass_proxy_check.set_active(self.whitelist.get("bypass_proxy", True))
             
-            bypass_dpi_check = Gtk.CheckButton(label="Исключить из DPI обхода")
+            bypass_dpi_check = Gtk.CheckButton(label=t('wl.bypass_dpi'))
             bypass_dpi_check.set_active(self.whitelist.get("bypass_dpi", False))
             bypass_dpi_check.set_sensitive(False)  # Пока не реализовано
             
@@ -851,7 +854,7 @@ class AdvancedTrayIndicator:
             exceptions_frame.add(exceptions_box)
             
             # Домены
-            domains_frame = Gtk.Frame(label="Домены и хосты (по одному на строку)")
+            domains_frame = Gtk.Frame(label=t('wl.domains'))
             domains_scroll = Gtk.ScrolledWindow()
             domains_scroll.set_min_content_height(150)
             
@@ -867,7 +870,7 @@ class AdvancedTrayIndicator:
             domains_frame.add(domains_scroll)
             
             # IP-адреса
-            ips_frame = Gtk.Frame(label="IP-адреса и сети CIDR (по одному на строку)")
+            ips_frame = Gtk.Frame(label=t('wl.ips'))
             ips_scroll = Gtk.ScrolledWindow()
             ips_scroll.set_min_content_height(100)
             
@@ -927,13 +930,13 @@ class AdvancedTrayIndicator:
                 ]
                 
                 if self.save_whitelist():
-                    self.show_notification("Белый список", "Настройки сохранены")
+                    self.show_notification(t('wl.title'), t('wl.saved'))
                     
                     # Применяем настройки прокси если белый список включен
                     if self.whitelist["enabled"] and self.whitelist["bypass_proxy"]:
                         self.apply_whitelist_proxy_settings()
                 else:
-                    self.show_notification("Ошибка", "Не удалось сохранить белый список")
+                    self.show_notification(t('notif.error'), t('wl.save_fail'))
 ###
         except Exception as e:
             print(f"ERROR in show_whitelist_dialog: {e}")
@@ -1055,7 +1058,7 @@ class AdvancedTrayIndicator:
             menu.append(Gtk.SeparatorMenuItem())
 
         # Поиск стратегии (перебор параметров)
-        strategy_item = Gtk.MenuItem(label="🧪 Поиск стратегии (перебор параметров)")
+        strategy_item = Gtk.MenuItem(label=t('menu.strategy'))
         strategy_item.connect("activate", self.show_strategy_search)
         menu.append(strategy_item)
 
@@ -1109,30 +1112,39 @@ class AdvancedTrayIndicator:
             status = result.stdout.strip()
             
             current_params = self.get_current_service_params()
-            status_text = "Запущен" if status == 'active' else "Остановлен"
-            
+            status_text = t('status.running') if status == 'active' else t('status.stopped')
+
+            # Метку статуса обновляем ВСЕГДА (и в AppIndicator-режиме,
+            # и в fallback Gtk.StatusIcon, и без индикатора вовсе) —
+            # раньше без индикатора меню зависало с «Проверка статуса...»
+            if status == 'active':
+                status_label = t('status.running_s')
+            else:
+                status_label = t('status.stopped_s')
+
+            if hasattr(self, 'status_item') and self.status_item:
+                self.status_item.set_label(status_label)
+
             if hasattr(self, 'indicator') and self.indicator:
                 if status == 'active':
-                    self.indicator.set_icon_full("network-transmit-receive-symbolic", "CIADPI запущен")
-                    self.status_item.set_label(f"✅ CIADPI {status_text}")
+                    self.indicator.set_icon_full("network-transmit-receive-symbolic", t('status.running_s'))
                 else:
-                    self.indicator.set_icon_full("network-offline-symbolic", "CIADPI остановлен")
-                    self.status_item.set_label(f"❌ CIADPI {status_text}")
-                
+                    self.indicator.set_icon_full("network-offline-symbolic", t('status.stopped_s'))
+
                 # Обновляем подсказку
                 self.update_tooltip()
             elif hasattr(self, 'status_icon'):
                 # Для Gtk.StatusIcon
                 if status == 'active':
                     self.status_icon.set_from_icon_name("network-transmit-receive-symbolic")
-                    self.status_icon.set_tooltip_text(f"CIADPI {status_text}")
+                    self.status_icon.set_tooltip_text(t('status.running_s'))
                 else:
                     self.status_icon.set_from_icon_name("network-offline-symbolic")
-                    self.status_icon.set_tooltip_text(f"CIADPI {status_text}")
-                
+                    self.status_icon.set_tooltip_text(t('status.stopped_s'))
+
         except Exception as e:
-            if hasattr(self, 'status_item'):
-                self.status_item.set_label("⚠️ Ошибка проверки статуса")
+            if hasattr(self, 'status_item') and self.status_item:
+                self.status_item.set_label(t('status.error'))
             
         return True
     
@@ -1405,7 +1417,13 @@ class AdvancedTrayIndicator:
         dialog.destroy()
 
     def get_system_proxy_settings(self):
-        """Получение текущих системных настроек прокси"""
+        """Получение текущих системных настроек прокси.
+
+        ⭐ host/port читаем ВСЕГДА (не только при mode='manual'):
+        GNOME хранит значения ручных полей и при выключенном прокси.
+        Если исходным режимом был none, а мы прочли только дефолты —
+        после «восстановления» в полях останутся наши 127.0.0.1:порт.
+        """
         settings = {
             'mode': 'none',
             'http_host': '',
@@ -1422,45 +1440,50 @@ class AdvancedTrayIndicator:
             if result.returncode == 0:
                 mode = result.stdout.strip().strip("'")
                 settings['mode'] = mode
-                
-                if mode == 'manual':
-                    # Получаем HTTP настройки
-                    host_result = subprocess.run([
-                        'gsettings', 'get', 'org.gnome.system.proxy.http', 'host'
-                    ], capture_output=True, text=True, check=False)
-                    port_result = subprocess.run([
-                        'gsettings', 'get', 'org.gnome.system.proxy.http', 'port'
-                    ], capture_output=True, text=True, check=False)
-                    
-                    if host_result.returncode == 0:
-                        settings['http_host'] = host_result.stdout.strip().strip("'")
-                    if port_result.returncode == 0:
-                        settings['http_port'] = port_result.stdout.strip()
-                    
-                    # Получаем игнорируемые хосты
-                    ignore_result = subprocess.run([
-                        'gsettings', 'get', 'org.gnome.system.proxy', 'ignore-hosts'
-                    ], capture_output=True, text=True, check=False)
-                    
-                    if ignore_result.returncode == 0:
-                        settings['ignore_hosts'] = ignore_result.stdout.strip()
-                        
-            elif mode == 'auto':
-                # Для автоматического режима можно сохранить PAC URL
-                pac_result = subprocess.run([
-                    'gsettings', 'get', 'org.gnome.system.proxy', 'autoconfig-url'
+
+                # ⭐ Ручные поля читаем при ЛЮБОМ режиме (GNOME их хранит
+                # даже в none — туда же они попадают после нашей установки)
+                host_result = subprocess.run([
+                    'gsettings', 'get', 'org.gnome.system.proxy.http', 'host'
                 ], capture_output=True, text=True, check=False)
-                
-                if pac_result.returncode == 0:
-                    settings['pac_url'] = pac_result.stdout.strip().strip("'")
+                port_result = subprocess.run([
+                    'gsettings', 'get', 'org.gnome.system.proxy.http', 'port'
+                ], capture_output=True, text=True, check=False)
+
+                if host_result.returncode == 0:
+                    settings['http_host'] = host_result.stdout.strip().strip("'")
+                if port_result.returncode == 0:
+                    settings['http_port'] = port_result.stdout.strip()
+
+                # Игнорируемые хосты — тоже при любом режиме
+                ignore_result = subprocess.run([
+                    'gsettings', 'get', 'org.gnome.system.proxy', 'ignore-hosts'
+                ], capture_output=True, text=True, check=False)
+                if ignore_result.returncode == 0:
+                    settings['ignore_hosts'] = ignore_result.stdout.strip()
+
+                if mode == 'auto':
+                    # Для автоматического режима можно сохранить PAC URL
+                    pac_result = subprocess.run([
+                        'gsettings', 'get', 'org.gnome.system.proxy', 'autoconfig-url'
+                    ], capture_output=True, text=True, check=False)
+                    
+                    if pac_result.returncode == 0:
+                        settings['pac_url'] = pac_result.stdout.strip().strip("'")
                             
         except Exception as e:
             print(f"❌ Ошибка получения настроек прокси: {e}")
         
         return settings
 
-    def apply_system_proxy(self, mode, host, port):
-        """Применение системных настроек прокси через NetworkManager"""
+    def apply_system_proxy(self, mode, host, port, apply_whitelist=True):
+        """Применение системных настроек прокси через NetworkManager.
+
+        apply_whitelist=False — режим восстановления исходных настроек:
+        белый список не вмешивается (иначе он затрёт оригинальный
+        ignore-hosts, который restore восстановит следом — лишняя
+        перезапись чужих настроек).
+        """
         try:
             # Только применяем настройки, не сохраняем оригинальные здесь
             # Оригинальные сохраняются только при первом включении нашего прокси
@@ -1506,8 +1529,23 @@ class AdvancedTrayIndicator:
                 # Для автоматического режима обычно нужен PAC URL
                 pass
 
+            elif mode == 'none':
+                # ⭐ Отключение прокси: вычищаем и ручные поля, иначе
+                # в настройках GNOME остаются наши host/port от прошлого
+                # manual-применения («не приведено в исходное состояние»).
+                for schema in ('http', 'https', 'ftp'):
+                    subprocess.run(['gsettings', 'reset',
+                                    f'org.gnome.system.proxy.{schema}', 'host'],
+                                   check=False)
+                    subprocess.run(['gsettings', 'reset',
+                                    f'org.gnome.system.proxy.{schema}', 'port'],
+                                   check=False)
+
             # ПРИМЕНЯЕМ БЕЛЫЙ СПИСОК ДЛЯ ИГНОРИРУЕМЫХ ХОСТОВ
-            if self.whitelist.get("enabled", False) and self.whitelist.get("bypass_proxy", True):
+            if not apply_whitelist:
+                # восстановление исходных: ignore-hosts вернёт caller
+                pass
+            elif self.whitelist.get("enabled", False) and self.whitelist.get("bypass_proxy", True):
                 ignore_hosts = self.whitelist.get("domains", []) + self.whitelist.get("ips", [])
                 if ignore_hosts:
                     ignore_string = "[" + ",".join([f"'{host}'" for host in ignore_hosts]) + "]"
@@ -1655,12 +1693,56 @@ class AdvancedTrayIndicator:
 
     # Четкое сохранение системных настроек
     def save_system_proxy_backup(self):
-        """Сохраняет текущие системные настройки как резервную копию"""
+        """Сохраняет текущие системные настройки как резервную копию.
+
+        ⭐ Копия пишется и в память, и НА ДИСК (~/.config/ciadpi/proxy_backup.json):
+        раньше бэкап жил только в RAM, и после перезапуска индикатора
+        «восстановить исходные» было нечем — оставались наши host/port.
+        Вызывать СТРОГО ДО apply_system_proxy (иначе в бэкап попадут
+        наши же настройки).
+        """
         self.original_system_proxy = self.get_system_proxy_settings()
+        # маркер: поля host/port захвачены при ЛЮБОМ режиме (v1.6.1+).
+        # Старые бэкапы (только manual) не имеют его — при восстановлении
+        # их поля нельзя писать вслепую.
+        self.original_system_proxy['fields_captured'] = True
         print("💾 Создана резервная копия системных настроек прокси:")
         print(f"   Режим: {self.original_system_proxy.get('mode')}")
         print(f"   Хост: {self.original_system_proxy.get('http_host')}")
         print(f"   Порт: {self.original_system_proxy.get('http_port')}")
+
+        # Персистентная копия на диск
+        try:
+            backup_file = Path.home() / '.config' / 'ciadpi' / 'proxy_backup.json'
+            backup_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(backup_file, 'w', encoding='utf-8') as f:
+                json.dump(self.original_system_proxy, f, indent=2, ensure_ascii=False)
+            print(f"💾 Резервная копия записана на диск: {backup_file}")
+        except Exception as e:
+            print(f"⚠️ Не удалось записать бэкап на диск: {e}")
+
+    def _load_system_proxy_backup_from_disk(self):
+        """Загружает сохранённый на диск бэкап исходных настроек (или None)."""
+        try:
+            backup_file = Path.home() / '.config' / 'ciadpi' / 'proxy_backup.json'
+            if backup_file.exists():
+                with open(backup_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    if isinstance(data, dict) and 'mode' in data:
+                        return data
+        except Exception as e:
+            print(f"⚠️ Не удалось прочитать бэкап с диска: {e}")
+        return None
+
+    def _clear_system_proxy_backup_on_disk(self):
+        """Удаляет дисковый бэкап после успешного восстановления."""
+        try:
+            backup_file = Path.home() / '.config' / 'ciadpi' / 'proxy_backup.json'
+            if backup_file.exists():
+                backup_file.unlink()
+                print("💾 Дисковый бэкап исходных настроек удалён (восстановление завершено)")
+        except Exception as e:
+            print(f"⚠️ Не удалось удалить бэкап: {e}")
 
     # Сохранение наших настроек
     def save_our_proxy_settings(self):
@@ -1707,17 +1789,19 @@ class AdvancedTrayIndicator:
                 
                 host = self.current_params.get("proxy_host", "")
                 port = self.current_params.get("proxy_port", "1080")
-                
+
+                # ⭐ БЭКАП ИСХОДНЫХ СИСТЕМНЫХ НАСТРОЕК — СТРОГО ДО apply:
+                # иначе в копию попадут наши же host/port, и «восстановление»
+                # вернёт наш прокси вместо исходного.
+                if not self.we_changed_proxy:
+                    self.save_system_proxy_backup()
+                    self.we_changed_proxy = True
+                    self.save_config()
+                    print("💾 Бэкап исходных настроек снят ДО применения нашего прокси")
+
                 success = self.apply_system_proxy('manual', host, port)
 
                 if success:
-                    # ⭐ ФЛАГ СТАВИМ ТОЛЬКО ПОСЛЕ РЕАЛЬНОГО ПРИМЕНЕНИЯ,
-                    # с сохранением бэкапа исходных системных настроек
-                    if not self.we_changed_proxy:
-                        self.save_system_proxy_backup()
-                        self.we_changed_proxy = True
-                        self.save_config()
-                        print("💾 Флаг we_changed_proxy установлен после применения прокси")
                     print("✅ Наши настройки прокси восстановлены при запуске")
                 else:
                     print("❌ Не удалось восстановить настройки при запуске")
@@ -1729,43 +1813,108 @@ class AdvancedTrayIndicator:
 
     # Восстановление системных настроек
     def restore_system_proxy_backup(self):
-        """Восстанавливает оригинальные системные настройки если включен автоотключение"""
-        # ⭐ ПРОВЕРЯЕМ ЧЕКБОКС
-        if not self.current_params.get("auto_disable_proxy", False):
-            print("ℹ️ Автоотключение выключено - не восстанавливаем системные настройки")
-            return False
-            
+        """Восстанавливает ОРИГИНАЛЬНЫЕ системные настройки прокси.
+
+        ⭐ Раньше метод молча выходил, если не включён чекбокс
+        «автоотключение» — но вызывается он и из других мест
+        (переход в local-режим, выбор «Выключен»), где восстановить
+        исходные настройки нужно БЕЗУСЛОВНО: мы меняли систему —
+        обязаны вернуть как было.
+        ⭐ Бэкап берём из памяти, а если программа перезапускалась —
+        с диска (~/.config/ciadpi/proxy_backup.json). Если бэкапа нет
+        вообще — не просто ставим mode=none, а вычищаем ВСЕ наши
+        следы (host/port в http/https/ftp, ignore-hosts, .proxy_env),
+        чтобы в настройках GNOME не оставались наши значения.
+        """
         if not self.we_changed_proxy:
             print("ℹ️ Мы не меняли прокси - нечего восстанавливать")
-            return False        
-        
-        """Восстанавливает оригинальные системные настройки"""     
+            return False
+
         try:
-            if not self.original_system_proxy:
-                print("ℹ️ Нет сохраненных системных настроек, отключаем прокси")
-                # Fallback: просто отключаем прокси
-                subprocess.run([
-                    'gsettings', 'set', 'org.gnome.system.proxy', 'mode', 'none'
-                ], check=False)
+            # Бэкап из памяти или с диска (после перезапуска программы)
+            backup = self.original_system_proxy
+            if not backup:
+                backup = self._load_system_proxy_backup_from_disk()
+            if not backup:
+                # Бэкапа нет: вычищаем наши следы полностью
+                print("ℹ️ Нет сохранённых исходных настроек — вычищаем наши следы")
+                self.apply_system_proxy('none', '', '0')
+                subprocess.run(['gsettings', 'reset',
+                                'org.gnome.system.proxy', 'ignore-hosts'],
+                               check=False)
+                self.restore_original_environment()
+                self._clear_system_proxy_backup_on_disk()
                 return True
-                
-            original_mode = self.original_system_proxy.get('mode', 'none')
-            original_host = self.original_system_proxy.get('http_host', '')
-            original_port = self.original_system_proxy.get('http_port', '1080')
-            
-            print("🔄 Восстанавливаем системные настройки прокси...")
-            
+
+            original_mode = backup.get('mode', 'none')
+            fields_captured = backup.get('fields_captured', False)
+
+            # Поля host/port: пишем только из нового бэкапа (fields_captured),
+            # старые бэкапы без маркера полей при none-режиме не содержат.
+            if fields_captured:
+                original_host = backup.get('http_host', '')
+                original_port = backup.get('http_port', '8080')
+            elif original_mode == 'manual':
+                # старый бэкап manual-режима: поля валидны
+                original_host = backup.get('http_host', '')
+                original_port = backup.get('http_port', '8080')
+            else:
+                # старый бэкап none/auto без полей — сбрасываем ручные поля
+                # к заводским, чтобы не оставить наши значения в GNOME
+                original_host = None
+                original_port = None
+
+            print("🔄 Восстанавливаем исходные системные настройки прокси...")
+            print(f"   Куда: mode={original_mode} host={original_host or '—'} port={original_port}")
+
             # Применяем оригинальные настройки
-            success = self.apply_system_proxy(original_mode, original_host, original_port)
-            
+            if original_host is None:
+                # Исходные поля неизвестны (старый бэкап) — режим ставим,
+                # а ручные поля http/https/ftp сбрасываем к заводским,
+                # иначе в GNOME останутся наши 127.0.0.1:порт
+                subprocess.run(['gsettings', 'set',
+                                'org.gnome.system.proxy', 'mode', original_mode],
+                               check=False)
+                for schema in ('http', 'https', 'ftp'):
+                    subprocess.run(['gsettings', 'reset',
+                                    f'org.gnome.system.proxy.{schema}', 'host'],
+                                   check=False)
+                    subprocess.run(['gsettings', 'reset',
+                                    f'org.gnome.system.proxy.{schema}', 'port'],
+                                   check=False)
+                success = True
+                print("✅ Режим восстановлен, ручные поля сброшены к заводским")
+            else:
+                success = self.apply_system_proxy(original_mode, original_host, original_port,
+                                                  apply_whitelist=False)
+
+            # Восстанавливаем оригинальный ignore-hosts из бэкапа
+            original_ignore = backup.get('ignore_hosts')
+            if original_ignore is not None:
+                subprocess.run(['gsettings', 'set', 'org.gnome.system.proxy',
+                                'ignore-hosts', original_ignore],
+                               check=False)
+                print(f"✅ ignore-hosts восстановлен: {original_ignore}")
+            else:
+                subprocess.run(['gsettings', 'reset',
+                                'org.gnome.system.proxy', 'ignore-hosts'],
+                               check=False)
+
+            # Восстанавливаем PAC URL, если был auto-режим
+            if original_mode == 'auto' and backup.get('pac_url'):
+                subprocess.run(['gsettings', 'set', 'org.gnome.system.proxy',
+                                'autoconfig-url', backup['pac_url']],
+                               check=False)
+
             if success:
-                # Очищаем переменные окружения                
+                self.restore_original_environment()
+                self._clear_system_proxy_backup_on_disk()
                 print("✅ Системные настройки прокси восстановлены")
             return success
-                
+
         except Exception as e:
             print(f"❌ Ошибка восстановления системных настроек: {e}")
-            return False              
+            return False
 
     def run_command(self, command):
         """Выполнение systemctl-команды через _systemctl (без запроса пароля)."""
@@ -2163,9 +2312,9 @@ class AdvancedTrayIndicator:
             self.show_notification("Ошибка", "Модуль автопоиска не доступен")
             return
         
-        dialog = Gtk.Dialog(title="Автопоиск параметров", flags=0)
+        dialog = Gtk.Dialog(title=t('auto.title'), flags=0)
         dialog.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
-                         "Запуск", Gtk.ResponseType.OK)
+                         t('auto.launch'), Gtk.ResponseType.OK)
         dialog.set_default_size(400, 200)
 
         content_area = dialog.get_content_area()
@@ -2176,7 +2325,7 @@ class AdvancedTrayIndicator:
         box.set_margin_start(10)
         box.set_margin_end(10)
         
-        label = Gtk.Label(label="Количество тестов:")
+        label = Gtk.Label(label=t('auto.n_tests'))
         spin = Gtk.SpinButton.new_with_range(1, 1000, 1)
         spin.set_value(50)
         
@@ -2222,7 +2371,7 @@ class AdvancedTrayIndicator:
         
         history = self.autosearcher.get_history(20)
         
-        dialog = Gtk.Dialog(title="История тестирования", flags=0)
+        dialog = Gtk.Dialog(title=t('hist.title'), flags=0)
         dialog.add_buttons(Gtk.STOCK_CLOSE, Gtk.ResponseType.CLOSE)
         dialog.set_default_size(600, 400)
         
@@ -2235,7 +2384,7 @@ class AdvancedTrayIndicator:
         text_view.set_wrap_mode(Gtk.WrapMode.WORD)
         
         buffer = text_view.get_buffer()
-        text = "История тестирования:\n\n"
+        text = t('hist.header') + "\n\n"
         
         for item in history:
             status = "✅" if item.get("success", False) else "❌"
@@ -2266,7 +2415,7 @@ class AdvancedTrayIndicator:
 
         searcher = StrategySearcher()
 
-        dialog = Gtk.Dialog(title="Поиск стратегии — перебор параметров", flags=0)
+        dialog = Gtk.Dialog(title=t('search.title'), flags=0)
         dialog.add_buttons(Gtk.STOCK_CLOSE, Gtk.ResponseType.CLOSE)
         dialog.set_default_size(760, 560)
         self.strategy_window = dialog
@@ -2279,7 +2428,7 @@ class AdvancedTrayIndicator:
         main_box.set_margin_end(10)
 
         # --- Настройки проверки ---
-        settings_frame = Gtk.Frame(label="Настройка проверки")
+        settings_frame = Gtk.Frame(label=t('search.settings'))
         settings_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         settings_box.set_margin_top(8)
         settings_box.set_margin_bottom(8)
@@ -2287,12 +2436,12 @@ class AdvancedTrayIndicator:
         settings_box.set_margin_end(8)
 
         row1 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        lbl_tests = Gtk.Label(label="Макс. комбинаций:")
+        lbl_tests = Gtk.Label(label=t('search.max_combos'))
         lbl_tests.set_xalign(0)
         spin_tests = Gtk.SpinButton.new_with_range(1, 200, 1)
         spin_tests.set_value(20)
 
-        lbl_port = Gtk.Label(label="Тестовый порт:")
+        lbl_port = Gtk.Label(label=t('search.test_port'))
         spin_port = Gtk.SpinButton.new_with_range(1024, 65535, 1)
         spin_port.set_value(searcher.test_port)
         row1.pack_start(lbl_tests, False, False, 0)
@@ -2302,11 +2451,11 @@ class AdvancedTrayIndicator:
         row1.pack_start(spin_port, False, False, 0)
 
         row2 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        lbl_urls = Gtk.Label(label="URL для проверки:")
+        lbl_urls = Gtk.Label(label=t('search.urls_label'))
         lbl_urls.set_xalign(0)
         urls_entry = Gtk.Entry()
         urls_entry.set_text(" ".join(searcher.default_test_urls))
-        urls_entry.set_tooltip_text("URL-адреса через пробел; доступ проверяется через тестовый прокси")
+        urls_entry.set_tooltip_text(t('search.url_hint'))
         urls_entry.set_hexpand(True)
         row2.pack_start(lbl_urls, False, False, 0)
         row2.pack_start(urls_entry, True, True, 0)
@@ -2316,7 +2465,7 @@ class AdvancedTrayIndicator:
         settings_frame.add(settings_box)
 
         # --- Прогресс ---
-        progress_label = Gtk.Label(label="Готов к поиску")
+        progress_label = Gtk.Label(label=t('search.ready'))
         progress_label.set_xalign(0)
         progressbar = Gtk.ProgressBar()
         progressbar.set_show_text(True)
@@ -2324,17 +2473,17 @@ class AdvancedTrayIndicator:
 
         # --- Кнопки управления ---
         btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        btn_start = Gtk.Button(label="▶️ Запустить поиск")
-        btn_stop = Gtk.Button(label="⏹ Остановить")
+        btn_start = Gtk.Button(label=t('search.start'))
+        btn_stop = Gtk.Button(label=t('search.stop'))
         btn_stop.set_sensitive(False)
-        btn_apply = Gtk.Button(label="✅ Применить лучшие параметры")
+        btn_apply = Gtk.Button(label=t('search.apply_best'))
         btn_apply.set_sensitive(False)
         btn_box.pack_start(btn_start, False, False, 0)
         btn_box.pack_start(btn_stop, False, False, 0)
         btn_box.pack_end(btn_apply, False, False, 0)
 
         # --- Журнал хода поиска ---
-        log_frame = Gtk.Frame(label="Ход поиска (куда подключаемся и что тестируем)")
+        log_frame = Gtk.Frame(label=t('search.log_frame'))
         scroll = Gtk.ScrolledWindow()
         scroll.set_vexpand(True)
         text_view = Gtk.TextView()
@@ -2369,9 +2518,9 @@ class AdvancedTrayIndicator:
         def on_progress(stage, data):
             """Колбэк из фонового потока — планируем обновление GUI."""
             if stage == 'start':
-                GLib.idle_add(ui_log, f"▶️ Старт: {data['total']} комбинаций, "
-                                      f"тестовый порт {data['port']}, "
-                                      f"подключение через 127.0.0.1:{data['port']}")
+                GLib.idle_add(ui_log, f"▶️ {t('search.start_log')}: {data['total']} "
+                                      f"{t('search.combos')} {data['port']}, "
+                                      f"{t('search.via')} 127.0.0.1:{data['port']}")
             elif stage == 'test':
                 r = data['result']
                 idx = data['index'] + 1
@@ -2380,14 +2529,14 @@ class AdvancedTrayIndicator:
                     total_now = max(idx, 1)
                     frac = idx / float(state.get('planned_total', total_now) or total_now)
                     if r['success']:
-                        ui_set_progress(frac, f"Тест {idx}: УСПЕХ ({r['urls_ok']}/{r['urls_total']} URL)")
+                        ui_set_progress(frac, f"{t('search.test')} {idx}: {t('search.ok_urls')} ({r['urls_ok']}/{r['urls_total']} URL)")
                         ui_log(f"[{idx}] ✅ {r['urls_ok']}/{r['urls_total']} URL, "
-                               f"средняя скорость {r['speed']:.2f}с | {r['params']}")
+                               f"{t('search.avg_speed')} {r['speed']:.2f}s | {r['params']}")
                         for url, ok, code, t in r.get('details', []):
                             mark = "✅" if ok else "❌"
                             ui_log(f"      {mark} {url} → HTTP {code} ({t}с)")
                     else:
-                        ui_set_progress(frac, f"Тест {idx}: неудача")
+                        ui_set_progress(frac, f"{t('search.test')} {idx}: {t('search.fail')}")
                         err = (r.get('error') or '')[:120]
                         ui_log(f"[{idx}] ❌ {err} | {r['params']}")
                     return False
@@ -2400,15 +2549,14 @@ class AdvancedTrayIndicator:
                     if best:
                         state['best_params'] = best
                         btn_apply.set_sensitive(True)
-                        ui_log(f"\n🏆 Лучшие параметры: {best}")
+                        ui_log(f"\n{t('search.best_found')}: {best}")
                         res = data.get('result') or {}
                         if res:
-                            ui_log(f"    Скорость: {res['speed']:.2f}с, "
-                                   f"доступно URL: {res['urls_ok']}/{res['urls_total']}")
+                            ui_log(f"    {t('search.speed')}: {res['speed']:.2f}s, "
+                                   f"{t('search.urls_avail')}: {res['urls_ok']}/{res['urls_total']}")
                     else:
-                        ui_log("\n😕 Рабочие параметры не найдены. "
-                               "Попробуйте другие URL или увеличьте число комбинаций.")
-                    ui_set_progress(1.0, "Поиск завершён")
+                        ui_log("\n😕 " + t('search.none_found'))
+                    ui_set_progress(1.0, t('search.finished'))
                     btn_start.set_sensitive(True)
                     btn_stop.set_sensitive(False)
                     state['running'] = False
@@ -2420,7 +2568,7 @@ class AdvancedTrayIndicator:
                 return
             urls = [u.strip() for u in urls_entry.get_text().split() if u.strip()]
             if not urls:
-                ui_log("⚠️ Укажите хотя бы один URL для проверки")
+                ui_log(t('search.need_urls'))
                 return
             searcher.test_port = int(spin_port.get_value())
             max_tests = int(spin_tests.get_value())
@@ -2438,24 +2586,24 @@ class AdvancedTrayIndicator:
 
         def on_stop(btn):
             searcher.stop_search()
-            ui_log("⏹ Остановка запрошена...")
+            ui_log(t('search.stop_req'))
 
         def on_apply(btn):
             params = state.get('best_params')
             if not params:
                 return
             dialog.set_sensitive(False)
-            self.show_notification("Применение...", "Обновление параметров сервиса")
+            self.show_notification(t('search.apply_run'), t('search.apply_run_2'))
 
             def apply_thread():
                 success = self.update_service_params(params)
                 def finish():
                     dialog.set_sensitive(True)
                     if success:
-                        ui_log(f"✅ Параметры применены: {params}")
+                        ui_log(f"✅ {t('search.applied')}: {params}")
                         self.show_notification(t('notif.success'), t('notif.best_applied'), category='params')
                     else:
-                        ui_log(f"❌ Не удалось применить параметры: {params}")
+                        ui_log(f"❌ {t('search.apply_fail')}: {params}")
                     return False
                 GLib.idle_add(finish)
 
@@ -2968,6 +3116,28 @@ class AdvancedTrayIndicator:
             print(f"⚠️ autostart: {e}")
             return False
 
+    def rebuild_menu(self):
+        """Пересоздать меню индикатора (например, после смены языка).
+
+        AppIndicator держит ссылку на меню — заменяем целиком,
+        старое уничтожаем. Вызывается из show_app_settings,
+        когда язык изменился: главное меню переключается сразу,
+        без перезапуска индикатора.
+        """
+        try:
+            old_menu = getattr(self, '_tray_menu', None)
+            new_menu = self.create_menu()
+            if self.indicator:
+                self.indicator.set_menu(new_menu)
+            self._tray_menu = new_menu
+            if old_menu:
+                old_menu.destroy()
+            # Сразу показываем актуальный статус (созданный create_menu
+            # айтем статуса с «Проверка...» перезапишется реальным состоянием)
+            self.update_status()
+        except Exception as e:
+            print(f"⚠️ Не удалось пересобрать меню: {e}")
+
     def show_app_settings(self, widget=None):
         """Диалог настроек приложения: язык, уведомления, автозапуск."""
         dialog = Gtk.Dialog(title=t('app.title'), flags=0)
@@ -3074,21 +3244,16 @@ class AdvancedTrayIndicator:
         self._set_autostart(chk_autostart.get_active())
         dialog.destroy()
 
-        # ⭐ Уведомление о смене языка — на ОБОИХ языках (пользователь
-        # мог не понять сообщение на новом языке)
+        # ⭐ ЯЗЫК ПРИМЕНЯЕТСЯ СРАЗУ: пересобираем меню трея
         if lang_changed:
-            info = Gtk.MessageDialog(
-                transient_for=None, flags=0,
-                message_type=Gtk.MessageType.INFO,
-                buttons=Gtk.ButtonsType.OK,
-                title=t('app.lang_restart_ru_title') + " / " +
-                      t('app.lang_restart_en_title'),
-                text="🇷🇺 " + t('app.lang_restart')
-                     + "\n\n🇬🇧 The language change takes effect after "
-                       "restarting the indicator (Exit → launch)."
-            )
-            info.run()
-            info.destroy()
+            self.rebuild_menu()
+            # уведомление на ОБОИХ языках (пользователь мог не понять
+            # сообщение на новом) — без блокирующего диалога,
+            # чтобы «Выход» никогда не зависал из-за скрытого окна
+            self.show_notification(
+                "🇷🇺 Язык изменён — меню обновлено\n🇬🇧 Language changed — menu updated",
+                t('app.lang_now'),
+                category=None)
 
         self.show_notification(t('notif.success'), t('app.saved'))
 
@@ -3112,14 +3277,30 @@ class AdvancedTrayIndicator:
             pass
 
     def exit_app(self, widget):
-        """Выход из приложения с правильным управлением прокси"""
+        """Выход из приложения с правильным управлением прокси.
+
+        ⭐ Gtk.main_quit() гасит только САМЫЙ ВНУТРЕННИЙ вложенный
+        цикл (открытый диалогом .run()). Если при выходе висит
+        какой-либо диалог (например, о смене языка — он мог потерять
+        фокус и спрятаться за окнами), внешний Gtk.main() продолжал
+        жить и трей «не выходил». Поэтому:
+        1) вычищаем очередь событий (чтобы pending-диалоги отработали),
+        2) вызываем main_quit несколько раз — по разу на каждый
+           уровень вложенности,
+        3) страховочный таймер добивает процесс через 500 мс.
+        """
+        # защита от повторного нажатия «Выход»
+        if getattr(self, '_exiting', False):
+            return
+        self._exiting = True
+
         print("💾 Выход: сохраняем настройки программы...")
-        
+
         # ⭐ СОХРАНЯЕМ НАСТРОЙКИ ПРОГРАММЫ ПЕРЕД ВЫХОДОМ
         self.current_params["we_changed_proxy"] = self.we_changed_proxy
         self.save_config()
         print(f"💾 Сохранены настройки: we_changed_proxy={self.we_changed_proxy}")
-        
+
         if self.current_params.get("auto_disable_proxy", False) and self.we_changed_proxy:
             try:
                 result = subprocess.run(
@@ -3127,24 +3308,37 @@ class AdvancedTrayIndicator:
                     capture_output=True, text=True, timeout=2
                 )
                 service_running = result.stdout.strip() == 'active'
-                
+
                 if not service_running:
                     # Сервис остановлен - восстанавливаем системные настройки
                     print("🔄 Выход: восстанавливаем системные настройки прокси...")
                     success = self.restore_system_proxy_backup()
                     if success:
                         print("✅ Системные настройки восстановлены при выходе")
-                    self.show_notification("Выход", "Системные настройки прокси восстановлены")
+                    self.show_notification(t('exit.title'), t('exit.restored'))
                 else:
                     print("ℹ️ Сервис запущен - оставляем наши настройки прокси")
-                    
+
             except Exception as e:
                 print(f"⚠️ Не удалось проверить статус сервиса: {e}")
-        
+
         if hasattr(self, 'is_searching') and self.is_searching:
             self.stop_autosearch()
-            
-        Gtk.main_quit()
+
+        # ⭐ ДОБИВАЕМ ВСЕ ВЛОЖЕННЫЕ ЦИКЛЫ (диалоги .run())
+        try:
+            while Gtk.events_pending():
+                Gtk.main_iteration_do(False)
+        except Exception:
+            pass
+        for _ in range(5):  # по числу возможных уровней вложенности
+            Gtk.main_quit()
+
+        # страховка: если что-то всё ещё живо — жёсткий выход через 500 мс
+        try:
+            GLib.timeout_add(500, lambda: (os._exit(0), False)[1])
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     # Запускаем как демон
