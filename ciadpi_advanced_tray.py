@@ -65,6 +65,18 @@ except ImportError as e:
     WHITELIST_AVAILABLE = False
     WhitelistManager = None 
 
+# ⭐ nfqws-движок (zapret): перехват пакетов через NFQUEUE.
+# Альтернатива byedpi-SOCKS: работает для ВСЕХ приложений машины
+# без настройки прокси, но требует root-сервиса и правил nftables.
+try:
+    from ciadpi_nfqws import NfqwsManager
+    NFQWS_AVAILABLE = True
+    print("✅ Модуль nfqws загружен")
+except ImportError as e:
+    print(f"⚠️ Модуль nfqws не доступен: {e}")
+    NFQWS_AVAILABLE = False
+    NfqwsManager = None
+
 # Отладочная информация
 DEBUG_LOG = Path.home() / '.config' / 'ciadpi' / 'indicator_debug.log'
 
@@ -128,7 +140,10 @@ class AdvancedTrayIndicator:
         if WHITELIST_AVAILABLE:
             self.whitelist_manager = WhitelistManager()
         else:
-            self.whitelist_manager = None        
+            self.whitelist_manager = None
+
+        # ⭐ nfqws-движок: создаём менеджер, если модуль доступен
+        self.nfqws = NfqwsManager() if NFQWS_AVAILABLE else None
 
         # ОДИН таймер для проверки прокси
         GLib.timeout_add(5000, self.check_current_proxy)
@@ -1056,6 +1071,42 @@ class AdvancedTrayIndicator:
         settings_item = Gtk.MenuItem(label=t('menu.settings'))
         settings_item.connect("activate", self.show_settings)
         menu.append(settings_item)
+
+        # ⭐ Движок обхода: byedpi (SOCKS) ↔ nfqws (NFQUEUE)
+        if NFQWS_AVAILABLE and self.nfqws:
+            engine_item = Gtk.MenuItem(label=t('engine.menu'))
+            engine_menu = Gtk.Menu()
+
+            active_engine = self._active_engine()
+            radio_byedpi = Gtk.RadioMenuItem(label=t('engine.byedpi'))
+            radio_nfqws = Gtk.RadioMenuItem.new_from_widget(radio_byedpi)
+            radio_nfqws.set_label(t('engine.nfqws'))
+            radio_byedpi.set_active(active_engine != 'nfqws')
+            radio_nfqws.set_active(active_engine == 'nfqws')
+            radio_byedpi.connect("activate",
+                                 lambda w: w.get_active()
+                                 and self.switch_engine(w, 'byedpi'))
+            radio_nfqws.connect("activate",
+                               lambda w: w.get_active()
+                               and self.switch_engine(w, 'nfqws'))
+            engine_menu.append(radio_byedpi)
+            engine_menu.append(radio_nfqws)
+            engine_menu.append(Gtk.SeparatorMenuItem())
+
+            engine_hint = Gtk.MenuItem(
+                label=t('engine.hint_state').format(
+                    st=('nfqws 🟢' if active_engine == 'nfqws'
+                        else ('byedpi 🟢' if active_engine == 'byedpi'
+                              else '—'))))
+            engine_hint.set_sensitive(False)
+            engine_menu.append(engine_hint)
+
+            nfqws_params_item = Gtk.MenuItem(label=t('engine.nfqws_params_menu'))
+            nfqws_params_item.connect("activate", self.show_nfqws_settings)
+            engine_menu.append(nfqws_params_item)
+
+            engine_item.set_submenu(engine_menu)
+            menu.append(engine_item)
 
         if PARAMS_SPEC_AVAILABLE:
             builder_item = Gtk.MenuItem(label=t('menu.builder'))
@@ -2207,6 +2258,207 @@ class AdvancedTrayIndicator:
     def restart_service(self, widget):
         self.run_command("systemctl restart ciadpi.service")
 
+    # ---------------- Переключатель движка: byedpi ↔ nfqws ----------------
+
+    def _active_engine(self):
+        """Какой движок сейчас активен: 'byedpi' | 'nfqws' | None.
+
+        nfqws считается активным, если его сервис running; byedpi —
+        если активен ciadpi.service. Одновременно оба активными быть
+        не должны (переключатель это гарантирует), но при внешнем
+        конфликте приоритет у nfqws (его правила глобальнее).
+        """
+        try:
+            if self.nfqws and self.nfqws.is_service_active():
+                return 'nfqws'
+        except Exception:
+            pass
+        try:
+            r = subprocess.run(['systemctl', 'is-active', 'ciadpi.service'],
+                               capture_output=True, text=True, timeout=3)
+            if (r.stdout or '').strip() == 'active':
+                return 'byedpi'
+        except Exception:
+            pass
+        return None
+
+    def switch_engine(self, widget, engine):
+        """Переключение движка обхода (вызов из меню, фоновый поток).
+
+        engine='byedpi': стоп nfqws (снятие nft-правил), старт ciadpi.
+        engine='nfqws':  стоп ciadpi, установка юнита+правил, старт nfqws.
+        Системный прокси трогаем только для byedpi-manual (как обычно).
+        """
+        if not getattr(self, '_engine_switching', False):
+            self._engine_switching = True
+        else:
+            return
+
+        def worker():
+            try:
+                other = 'nfqws' if engine == 'byedpi' else 'byedpi'
+                print(f"🔄 Переключение движка: {other} → {engine}")
+
+                # 1) останавливаем другой движок
+                if engine == 'byedpi' and self.nfqws:
+                    ok, err = self.nfqws.stop()
+                    if not ok:
+                        print(f"⚠️ nfqws stop: {err}")
+                    # страховка: правила могли остаться
+                    if not self.nfqws.rules_active():
+                        self.nfqws.remove_rules_fallback()
+                elif engine == 'nfqws':
+                    # byedpi останавливаем без откатов прокси:
+                    # если стоял manual-прокси — он умрёт вместе с портом,
+                    # восстановим как обычно при старте byedpi
+                    if self.current_params.get("proxy_enabled", False) \
+                            and self.we_changed_proxy:
+                        try:
+                            self.restore_system_proxy_backup()
+                            self.we_changed_proxy = False
+                            self.current_params["we_changed_proxy"] = False
+                            self.save_config()
+                        except Exception as e:
+                            print(f"⚠️ откат прокси при смене движка: {e}")
+                    self._systemctl('stop', 'ciadpi.service')
+
+                # 2) запускаем выбранный
+                if engine == 'byedpi':
+                    ok, err = self._systemctl('start', 'ciadpi.service')
+                else:
+                    if not self.nfqws:
+                        self.show_notification(t('notif.error'),
+                                               t('engine.nfqws_unavailable'),
+                                               category='service')
+                        return
+                    if not self.nfqws.is_installed():
+                        self.show_notification(
+                            t('notif.error'), t('engine.nfqws_not_installed'),
+                            category='service')
+                        return
+                    ok, err = self.nfqws.start()
+                    ok = ok and self.nfqws.is_service_active()
+                    if ok:
+                        # даём правилам примениться и проверяем
+                        time.sleep(1)
+                        if not self.nfqws.rules_active():
+                            ok, err = False, t('engine.rules_not_applied')
+
+                if ok:
+                    self.current_params['engine'] = engine
+                    self.save_config()
+                    self.show_notification(
+                        t('notif.success'),
+                        t('engine.now').format(
+                            name='byedpi (SOCKS)' if engine == 'byedpi'
+                            else 'nfqws (NFQUEUE)'),
+                        category='service')
+                else:
+                    self.show_notification(t('notif.error'),
+                                           err or 'switch failed',
+                                           category='service')
+                self.update_status()
+                self.rebuild_menu()
+            finally:
+                self._engine_switching = False
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def show_nfqws_settings(self, widget=None):
+        """Диалог параметров nfqws-движка (формат zapret, не byedpi!)."""
+        if not self.nfqws:
+            self.show_notification(t('notif.error'), t('engine.nfqws_unavailable'))
+            return
+
+        dialog = Gtk.Dialog(title=t('engine.nfqws_title'), flags=0)
+        dialog.add_buttons(t('btn.cancel'), Gtk.ResponseType.CANCEL,
+                           t('btn.ok'), Gtk.ResponseType.OK)
+        dialog.set_default_size(640, 380)
+
+        content = dialog.get_content_area()
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        vbox.set_margin_top(10); vbox.set_margin_bottom(10)
+        vbox.set_margin_start(10); vbox.set_margin_end(10)
+
+        lbl = Gtk.Label(label=t('engine.nfqws_params'))
+        lbl.set_xalign(0)
+        entry = Gtk.Entry()
+        cfg = self.nfqws.load_config()
+        entry.set_text(cfg.get('params', self.nfqws.default_params))
+        entry.set_width_chars(60)
+
+        hint = Gtk.Label()
+        hint.set_markup(f"<small>{t('engine.nfqws_hint')}</small>")
+        hint.set_xalign(0)
+        hint.set_line_wrap(True)
+
+        # Примеры для zapret-формата
+        examples_frame = Gtk.Frame(label=t('settings.examples'))
+        ex_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        ex_box.set_margin_top(8); ex_box.set_margin_bottom(8)
+        ex_box.set_margin_start(8); ex_box.set_margin_end(8)
+        for ex in (
+            '--filter-tcp=80,443 --dpi-desync=disorder2 --dpi-desync-split-pos=1',
+            '--filter-tcp=443 --dpi-desync=split2 --dpi-desync-split-pos=1 --dpi-desync-fake-tls=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin',
+            '--filter-tcp=80,443 --dpi-desync=fake,fake,split2 --dpi-desync-split-pos=1 --dpi-desync-ttl=4',
+            '--filter-tcp=443 --dpi-desync=syndata',
+        ):
+            e = Gtk.Entry(); e.set_text(ex); e.set_editable(False)
+            e.set_can_focus(False); e.set_hexpand(True)
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
+            row.pack_start(e, True, True, 0)
+            cp = Gtk.Button.new_from_icon_name("edit-copy-symbolic",
+                                                Gtk.IconSize.BUTTON)
+            cp.connect("clicked", self.on_copy_example, ex)
+            row.pack_start(cp, False, False, 0)
+            ex_box.pack_start(row, False, False, 0)
+
+        info = Gtk.Label()
+        ver = self.nfqws.check_binary() or '—'
+        info.set_markup(f"<small>nfqws: {ver}</small>")
+        info.set_xalign(0)
+
+        vbox.pack_start(lbl, False, False, 0)
+        vbox.pack_start(entry, False, False, 0)
+        vbox.pack_start(hint, False, False, 0)
+        vbox.pack_start(examples_frame, False, False, 0)
+        vbox.pack_start(info, False, False, 0)
+        content.pack_start(vbox, True, True, 0)
+        content.show_all()
+
+        while True:
+            response = dialog.run()
+            if response != Gtk.ResponseType.OK:
+                break
+            params = entry.get_text().strip()
+            # валидация через сам nfqws (--dry-run)
+            try:
+                r = subprocess.run(
+                    [str(self.nfqws.nfqws_bin), '--dry-run',
+                     '--qnum', str(self.nfqws.QNUM),
+                     '--dpi-desync-fwmark', self.nfqws.DESYNC_MARK]
+                    + params.split(),
+                    capture_output=True, text=True, timeout=10)
+                if r.returncode != 0:
+                    err_d = Gtk.MessageDialog(
+                        transient_for=dialog, flags=0,
+                        message_type=Gtk.MessageType.ERROR,
+                        buttons=Gtk.ButtonsType.OK,
+                        text=(r.stderr or r.stdout or '')[-400:])
+                    err_d.run(); err_d.destroy()
+                    continue
+            except Exception as e:
+                print(f"⚠️ dry-run nfqws: {e}")
+
+            cfg['params'] = params
+            self.nfqws.save_config(cfg)
+            # если сервис активен — перезаписываем юнит и рестартуем
+            if self.nfqws.is_service_active():
+                threading.Thread(target=self.nfqws.write_unit, args=(params,),
+                                 daemon=True).start()
+            break
+        dialog.destroy()
+
     # ---------------- Валидация значений ciadpi ----------------
     # Позиция desync: -?[смещение][:повторы][:шаг] с флагами +s/+h/+n (+e/m/r/s вторым)
     OFFSET_VAL = r'-?\d+(:\d+)?(:\d+)?(\+[shn][emrs]?)?'
@@ -2641,6 +2893,30 @@ class AdvancedTrayIndicator:
         row1.pack_start(lbl_port, False, False, 0)
         row1.pack_start(spin_port, False, False, 0)
 
+        # ⭐ Режим «до нахождения»: лимит попыток выключается, перебор
+        # идёт пока не найдётся рабочая стратегия (или пользователь не
+        # нажмёт «Остановить»). Мин. попыток — нижний предел: успех
+        # раньше этого числа поиск не завершает.
+        chk_until_found = Gtk.CheckButton(label=t('search.until_found'))
+        chk_until_found.set_tooltip_text(t('search.until_found_hint'))
+        lbl_min_tests = Gtk.Label(label=t('search.min_tests'))
+        spin_min_tests = Gtk.SpinButton.new_with_range(1, 200, 1)
+        spin_min_tests.set_value(10)
+        row_mode = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        row_mode.pack_start(chk_until_found, False, False, 0)
+        row_mode.pack_start(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL), False, False, 4)
+        row_mode.pack_start(lbl_min_tests, False, False, 0)
+        row_mode.pack_start(spin_min_tests, False, False, 0)
+
+        def on_until_found_toggled(btn):
+            limited = not btn.get_active()
+            spin_tests.set_sensitive(limited)
+            lbl_tests.set_sensitive(limited)
+            spin_min_tests.set_sensitive(not limited)
+            lbl_min_tests.set_sensitive(not limited)
+        chk_until_found.connect("toggled", on_until_found_toggled)
+        on_until_found_toggled(chk_until_found)
+
         row2 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         lbl_urls = Gtk.Label(label=t('search.urls_label'))
         lbl_urls.set_xalign(0)
@@ -2652,6 +2928,7 @@ class AdvancedTrayIndicator:
         row2.pack_start(urls_entry, True, True, 0)
 
         settings_box.pack_start(row1, False, False, 0)
+        settings_box.pack_start(row_mode, False, False, 0)
         settings_box.pack_start(row2, False, False, 0)
         settings_frame.add(settings_box)
 
@@ -2702,27 +2979,51 @@ class AdvancedTrayIndicator:
             mark = log_buffer.create_mark(None, log_buffer.get_end_iter(), False)
             text_view.scroll_to_mark(mark, 0.0, True, 0.0, 1.0)
 
-        def ui_set_progress(fraction, text):
-            progressbar.set_fraction(min(1.0, fraction))
+        def ui_set_progress(fraction, text, pulse=False):
+            if pulse:
+                progressbar.pulse()
+            else:
+                progressbar.set_fraction(min(1.0, fraction))
             progressbar.set_text(text)
+
+        def _log_test_result(r, idx):
+            """Общая строка лога для одного теста (обе ветки update_test)."""
+            if r['success']:
+                ui_log(f"[{idx}] ✅ {r['urls_ok']}/{r['urls_total']} URL, "
+                       f"{t('search.avg_speed')} {r['speed']:.2f}s | {r['params']}")
+            else:
+                err = (r.get('error') or '')[:120]
+                ui_log(f"[{idx}] ❌ {err} | {r['params']}")
 
         def on_progress(stage, data):
             """Колбэк из фонового потока — планируем обновление GUI."""
             if stage == 'start':
-                GLib.idle_add(ui_log, f"▶️ {t('search.start_log')}: {data['total']} "
-                                      f"{t('search.combos')} {data['port']}, "
-                                      f"{t('search.via')} 127.0.0.1:{data['port']}")
+                if data.get('unlimited'):
+                    start_line = (f"▶️ {t('search.start_log')}: "
+                                  f"{t('search.unlimited_mode')} "
+                                  f"{t('search.via')} 127.0.0.1:{data['port']}")
+                else:
+                    start_line = (f"▶️ {t('search.start_log')}: {data['total']} "
+                                  f"{t('search.combos')} {data['port']}, "
+                                  f"{t('search.via')} 127.0.0.1:{data['port']}")
+                GLib.idle_add(ui_log, start_line)
             elif stage == 'test':
                 r = data['result']
                 idx = data['index'] + 1
 
                 def update_test(r=r, idx=idx):
+                    if state.get('unlimited'):
+                        # без лимита: пульсация, доля не имеет смысла
+                        ui_set_progress(0.0, f"{t('search.test')} {idx}: "
+                                     f"{'✅ ' + t('search.ok_urls') if r['success'] else t('search.fail')} "
+                                     f"({r['urls_ok']}/{r['urls_total']} URL)",
+                                     pulse=True)
+                        _log_test_result(r, idx)
+                        return False
                     total_now = max(idx, 1)
                     frac = idx / float(state.get('planned_total', total_now) or total_now)
                     if r['success']:
                         ui_set_progress(frac, f"{t('search.test')} {idx}: {t('search.ok_urls')} ({r['urls_ok']}/{r['urls_total']} URL)")
-                        ui_log(f"[{idx}] ✅ {r['urls_ok']}/{r['urls_total']} URL, "
-                               f"{t('search.avg_speed')} {r['speed']:.2f}s | {r['params']}")
                         # ⭐ переменная называется sec, НЕ t: раньше цикл
                         # `for ... t in details` затенял функцию перевода t()
                         # и UnboundLocalError убивал КАЖДОЕ обновление GUI —
@@ -2732,8 +3033,7 @@ class AdvancedTrayIndicator:
                             ui_log(f"      {mark} {url} → HTTP {code} ({sec}с)")
                     else:
                         ui_set_progress(frac, f"{t('search.test')} {idx}: {t('search.fail')}")
-                        err = (r.get('error') or '')[:120]
-                        ui_log(f"[{idx}] ❌ {err} | {r['params']}")
+                    _log_test_result(r, idx)
                     return False
                 GLib.idle_add(update_test)
 
@@ -2766,16 +3066,20 @@ class AdvancedTrayIndicator:
                 ui_log(t('search.need_urls'))
                 return
             searcher.test_port = int(spin_port.get_value())
-            max_tests = int(spin_tests.get_value())
-            state.update({'running': True, 'best_params': None, 'planned_total': max_tests})
+            unlimited = chk_until_found.get_active()
+            max_tests = 0 if unlimited else int(spin_tests.get_value())
+            min_tests = int(spin_min_tests.get_value()) if unlimited else None
+            state.update({'running': True, 'best_params': None, 'unlimited': unlimited,
+                          'planned_total': max_tests})
             btn_start.set_sensitive(False)
             btn_stop.set_sensitive(True)
             btn_apply.set_sensitive(False)
             log_buffer.set_text("")
-            ui_set_progress(0.0, "Запуск...")
+            ui_set_progress(0.0, t('search.unlimited_mode') if unlimited else "Запуск...")
             threading.Thread(
                 target=searcher.find_optimal_params,
                 args=(max_tests, urls, on_progress),
+                kwargs={'min_tests': min_tests},
                 daemon=True
             ).start()
 

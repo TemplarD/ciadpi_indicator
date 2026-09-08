@@ -32,6 +32,7 @@ for f in \
     ciadpi_autosearch.py \
     ciadpi_param_generator.py \
     ciadpi_whitelist.py \
+    ciadpi_nfqws.py \
     diagnose_ciadpi.py
 do
     if [ -f "$ROOT/$f" ]; then
@@ -93,9 +94,11 @@ Maintainer: Templard <templard@users.noreply.github.com>
 Homepage: https://github.com/TemplarD/ciadpi_indicator
 Description: System tray indicator for CIADPI/byedpi DPI bypass
  Complete GUI management for the byedpi (ciadpi) DPI bypass tool:
- service start/stop, parameter builder, brute-force strategy search,
- proxy management with local-only mode, RU/EN localization,
- passwordless privilege setup, and built-in byedpi updater.
+ service start/stop, parameter builder, brute-force strategy search
+ (until-found mode), dual bypass engine switch (byedpi SOCKS or
+ zapret nfqws NFQUEUE), proxy management with local-only mode,
+ RU/EN localization, passwordless privilege setup, and built-in
+ byedpi updater.
 EOF
 
 # ---------- postinst: сервис, права, автозапуск ----------
@@ -179,7 +182,10 @@ cat > "$BUILD/DEBIAN/prerm" <<'PRERM'
 set -e
 if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
     systemctl stop ciadpi.service 2>/dev/null || true
+    systemctl stop ciadpi-nfqws.service 2>/dev/null || true
+    nft delete table inet ciadpi 2>/dev/null || true
     systemctl disable ciadpi.service 2>/dev/null || true
+    systemctl disable ciadpi-nfqws.service 2>/dev/null || true
     pkill -f "ciadpi_advanced_tray.py" 2>/dev/null || true
 fi
 PRERM
@@ -191,7 +197,9 @@ cat > "$BUILD/DEBIAN/postrm" <<'POSTRM'
 set -e
 if [ "$1" = "purge" ]; then
     rm -f /etc/systemd/system/ciadpi.service
+    rm -f /etc/systemd/system/ciadpi-nfqws.service
     rm -rf /etc/systemd/system/ciadpi.service.d
+    nft delete table inet ciadpi 2>/dev/null || true
     rm -f /etc/sudoers.d/ciadpi
     rm -f /etc/polkit-1/rules.d/49-ciadpi-indicator.rules
     systemctl daemon-reload 2>/dev/null || true

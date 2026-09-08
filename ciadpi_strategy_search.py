@@ -109,12 +109,44 @@ class StrategySearcher:
 
     # ---------------- Комбинации параметров ----------------
 
+    def _generator_stream(self, seen, batch=60):
+        """Ленивый поток новых комбинаций из генератора.
+
+        AdvancedParamGenerator может исчерпать свои шаблоны. Чтобы режим
+        «до нахождения» не зацикливался на конечном списке, при исчерпании
+        просим генератор расширить набор (batch растёт с каждым кругом:
+        60, 120, 180, ... комбинаций), пропуская уже проверенные строки.
+        """
+        if not (_GENERATOR_AVAILABLE and AdvancedParamGenerator is not None):
+            return
+        wave = 1
+        while True:
+            try:
+                gen = AdvancedParamGenerator()
+                produced = gen.generate_comprehensive_params(batch * wave)
+            except Exception as e:
+                print(f"⚠️ Генератор недоступен: {e}")
+                return
+            new_count = 0
+            for p in produced:
+                if p.strip() and p not in seen:
+                    seen.add(p)
+                    new_count += 1
+                    yield p
+            if new_count == 0:
+                # генератор выдал всё, что мог — новых комбинаций нет
+                return
+            wave += 1
+
     def generate_combinations(self, max_tests=30):
         """Список параметров для тестирования.
 
         Порядок: известные рабочие -> свежие успешные из истории -> новые из генератора.
+        max_tests=0 или None — режим «до нахождения» (без лимита).
         """
+        unlimited = not max_tests  # 0/None → без лимита попыток
         combos = []
+        seen = set()
 
         known_working = [
             "-T3 -A torst -o1 -o25+s -r 1+s",
@@ -134,6 +166,7 @@ class StrategySearcher:
             "-A torst -d 1+s -d 2+s",
         ]
         combos.extend(known_working)
+        seen.update(known_working)
 
         # Успешные из истории (без повторов)
         # ⭐ фильтр мусора: старые записи содержали битые токены
@@ -173,15 +206,23 @@ class StrategySearcher:
                 print(f"⚠️ История: пропущена битая строка: {p!r}")
                 continue
             combos.append(p)
+            seen.add(p)
 
         # Новые из генератора
+        if unlimited:
+            # Режим «до нахождения»: полный список строится лениво
+            # в find_optimal_params через _generator_stream — здесь
+            # только известные + история (конечное, проверенное ядро).
+            return combos
+
         if _GENERATOR_AVAILABLE and AdvancedParamGenerator is not None:
             try:
                 gen = AdvancedParamGenerator()
                 generated = gen.generate_comprehensive_params(max_tests * 2)
                 for p in generated:
-                    if p.strip() and p not in combos:
+                    if p.strip() and p not in seen:
                         combos.append(p)
+                        seen.add(p)
             except Exception as e:
                 print(f"⚠️ Генератор недоступен: {e}")
 
@@ -361,18 +402,38 @@ class StrategySearcher:
     # ---------------- Основной поиск ----------------
 
     def find_optimal_params(self, max_tests=20, test_urls=None,
-                            progress_callback=None, port=None):
+                            progress_callback=None, port=None,
+                            min_tests=None):
         """Перебор комбинаций.
 
+        max_tests=0/None — режим «до нахождения»: перебор без лимита,
+        останавливается ТОЛЬКО по первой успешной комбинации, кнопке
+        «Остановить» или исчерпанию генератора. Комбинации достаются
+        лениво: известные рабочие → успешная история → поток генератора
+        (волны 60/120/180… без повторов).
+
+        min_tests — нижний предел в unlimited-режиме: успех НЕ завершает
+        поиск раньше этого числа попыток (первый успех на капризном DPI
+        может быть случайным; лишние подтверждения не помешают), дальше
+        первый же успех останавливает. Итог — самая быстрая из успешных.
+        В лимитированном режиме игнорируется.
+
         progress_callback(stage, data) вызывается из фонового потока:
-          stage='start'   data={'total': N}
+          stage='start'   data={'total': N, 'port': P, 'unlimited': bool}
+                           (total=0 в unlimited-режиме)
           stage='test'    data={'index': i, 'params': ..., 'result': {...}}
-          stage='done'    data={'best': ...|None}
+          stage='done'    data={'best': ...|None, 'result': ...|None}
 
         Возвращает (best_params|None, best_result|None).
         """
         if self.is_searching:
             return None, None
+
+        unlimited = not max_tests  # 0/None → «до нахождения»
+        # В unlimited-режиме успех завершает поиск не раньше min_tests
+        min_floor = 1
+        if unlimited and min_tests:
+            min_floor = max(1, int(min_tests))
 
         self.is_searching = True
         self.stop_requested = False
@@ -384,28 +445,54 @@ class StrategySearcher:
 
         combos = self.generate_combinations(max_tests)
         best_params, best_result = None, None
+        tested_count = 0
 
         if progress_callback:
-            progress_callback('start', {'total': len(combos), 'port': self.test_port})
-        self.logger.info(f"Начат поиск: {len(combos)} комбинаций, порт {self.test_port}")
+            progress_callback('start', {'total': 0 if unlimited else len(combos),
+                                         'port': self.test_port,
+                                         'unlimited': unlimited})
+        mode_txt = ("БЕЗ ЛИМИТА (до нахождения)" if unlimited
+                    else f"{len(combos)} комбинаций")
+        self.logger.info(f"Начат поиск: {mode_txt}, порт {self.test_port}")
 
-        for i, params in enumerate(combos):
+        # Ленивый источник: конечное ядро, затем (в unlimited) поток генератора
+        seen_union = set(combos)
+
+        def _combo_source():
+            for p in combos:
+                yield p
+            if unlimited:
+                for p in self._generator_stream(seen_union, batch=60):
+                    yield p
+                # генератор исчерпан — источник заканчивается, поиск
+                # завершится с тем, что успели проверить
+
+        for params in _combo_source():
             if self.stop_requested:
                 self.logger.info("Поиск прерван пользователем")
                 break
 
             res = self.test_params(params, test_urls)
+            tested_count += 1
             self.add_to_history(res)
             self.logger.info(
-                f"[{i+1}/{len(combos)}] {'OK' if res['success'] else 'FAIL'} "
+                f"[{tested_count}] {'OK' if res['success'] else 'FAIL'} "
                 f"{res['speed']:.2f}s {params} {res.get('error','')}"
             )
 
             if progress_callback:
-                progress_callback('test', {'index': i, 'params': params, 'result': res})
+                progress_callback('test', {'index': tested_count - 1,
+                                           'params': params, 'result': res})
 
             if res['success'] and (best_result is None or res['speed'] < best_result['speed']):
                 best_params, best_result = params, res
+
+            # unlimited: первый успех ПОСЛЕ нижнего предела завершает поиск
+            if unlimited and res['success'] and tested_count >= min_floor:
+                self.logger.info(
+                    f"Найдена рабочая стратегия (попытка {tested_count}) "
+                    f"— останавливаемся: {params}")
+                break
 
         self.is_searching = False
 
@@ -426,6 +513,12 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description='Поиск оптимальных параметров ciadpi')
     parser.add_argument('--max-tests', type=int, default=20)
+    parser.add_argument('--until-found', action='store_true',
+                        help='Искать до нахождения: без лимита попыток, '
+                             'стоп по первой успешной комбинации (игнорирует --max-tests)')
+    parser.add_argument('--min-tests', type=int, default=None,
+                        help='В режиме --until-found: успех завершает поиск '
+                             'не раньше этого числа попыток')
     parser.add_argument('--port', type=int, default=1081)
     parser.add_argument('--url', action='append', help='Доп. URL для проверки (можно несколько)')
     args = parser.parse_args()
@@ -435,9 +528,15 @@ if __name__ == '__main__':
     if args.url:
         urls = args.url + urls
 
+    max_tests = 0 if args.until_found else args.max_tests
+
     def cb(stage, data):
         if stage == 'start':
-            print(f"▶️ Всего комбинаций: {data['total']} (тестовый порт {data['port']})")
+            if data.get('unlimited'):
+                print(f"▶️ Режим «до нахождения»: лимита нет, стоп по успеху "
+                      f"или Ctrl+C (тестовый порт {data['port']})")
+            else:
+                print(f"▶️ Всего комбинаций: {data['total']} (тестовый порт {data['port']})")
         elif stage == 'test':
             r = data['result']
             status = f"✅ {r['urls_ok']}/{r['urls_total']} за {r['speed']:.2f}s" if r['success'] \
@@ -449,4 +548,4 @@ if __name__ == '__main__':
             else:
                 print("\n😕 Рабочие параметры не найдены")
 
-    best, res = s.find_optimal_params(args.max_tests, urls, cb)
+    best, res = s.find_optimal_params(max_tests, urls, cb, min_tests=args.min_tests)

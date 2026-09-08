@@ -243,13 +243,15 @@ HELP_TEXTS = {
 
 
 ABOUT_TEXTS = {
-    'ru': """🔰 CIADPI Advanced Indicator v1.6
+    'ru': """🔰 CIADPI Advanced Indicator v1.7
 
     📡 Продвинутый индикатор для управления сервисом обхода DPI
 
     🌟 ОСНОВНЫЕ ФУНКЦИИ:
     • Автоматизированное управление прокси
     • Оптимизация параметров (конструктор, поиск стратегии)
+    • Поиск «до нахождения» — без лимита попыток
+    • Двойной движок: byedpi (SOCKS) ↔ nfqws (NFQUEUE)
     • Мониторинг статуса в системном трее
     • Поддержка белого списка
     • Локализация RU/EN
@@ -275,13 +277,15 @@ ABOUT_TEXTS = {
 
     💻 РАЗРАБОТЧИК: Templard
 """,
-    'en': """🔰 CIADPI Advanced Indicator v1.6
+    'en': """🔰 CIADPI Advanced Indicator v1.7
 
     📡 Advanced tray indicator for managing a DPI bypass service
 
     🌟 KEY FEATURES:
     • Automated proxy management
     • Parameter tuning (builder, strategy search)
+    • Until-found search — no attempt limit
+    • Dual engine: byedpi (SOCKS) ↔ nfqws (NFQUEUE)
     • System tray status monitoring
     • Whitelist support
     • RU/EN localization

@@ -37,6 +37,22 @@ ${TARGET_USER} ALL=(root) NOPASSWD: /usr/bin/tee /etc/systemd/system/ciadpi.serv
 ${TARGET_USER} ALL=(root) NOPASSWD: /usr/bin/rm -rf /etc/systemd/system/ciadpi.service.d
 EOF
 
+# --- 1a) sudoers: nfqws-движок (сервис + правила nftables) ---
+# Таблица nft `ciadpi` отдельная от zapret; хелпер apply/remove
+# ограничен этим файлом правил. NFT_BIN может отсутствовать на
+# системах без nftables — тогда блок пропускается.
+NFT_BIN="$(command -v nft || true)"
+RULES_HELPER="\$HOME/.config/ciadpi/ciadpi_nfqws_rules.sh"
+if [ -n "$NFT_BIN" ]; then
+cat >> "$SUDOERS_FILE" <<EOF
+${TARGET_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_BIN} start ciadpi-nfqws.service, ${SYSTEMCTL_BIN} stop ciadpi-nfqws.service, ${SYSTEMCTL_BIN} restart ciadpi-nfqws.service, ${SYSTEMCTL_BIN} status ciadpi-nfqws.service, ${SYSTEMCTL_BIN} show ciadpi-nfqws.service, ${SYSTEMCTL_BIN} is-active ciadpi-nfqws.service, ${SYSTEMCTL_BIN} enable ciadpi-nfqws.service, ${SYSTEMCTL_BIN} disable ciadpi-nfqws.service
+${TARGET_USER} ALL=(root) NOPASSWD: /usr/bin/tee /etc/systemd/system/ciadpi-nfqws.service
+${TARGET_USER} ALL=(root) NOPASSWD: ${NFT_BIN} -f /home/${TARGET_USER}/.config/ciadpi/ciadpi_nfqws.nft
+${TARGET_USER} ALL=(root) NOPASSWD: ${NFT_BIN} delete table inet ciadpi
+${TARGET_USER} ALL=(root) NOPASSWD: ${NFT_BIN} list ruleset
+EOF
+fi
+
 # Дублируем для старого пути /bin/systemctl (старые дистрибутивы)
 if [ -x /bin/systemctl ] && [ "$(readlink -f /bin/systemctl)" != "$(readlink -f "$SYSTEMCTL_BIN")" ]; then
 cat >> "$SUDOERS_FILE" <<EOF
@@ -54,7 +70,7 @@ else
     exit 1
 fi
 
-# --- 2) polkit-правило: прямые вызовы systemctl без пароля (только ciadpi.service) ---
+# --- 2) polkit-правило: прямые вызовы systemctl без пароля (ciadpi + ciadpi-nfqws) ---
 POLKIT_RULES_DIR=""
 for d in /etc/polkit-1/rules.d /usr/share/polkit-1/rules.d; do
     if [ -d "$d" ]; then POLKIT_RULES_DIR="$d"; break; fi
@@ -62,11 +78,12 @@ done
 
 if [ -n "$POLKIT_RULES_DIR" ]; then
 cat > "$POLKIT_RULES_DIR/49-ciadpi-indicator.rules" <<EOF
-// Allow ${TARGET_USER} to manage ciadpi.service without password
+// Allow ${TARGET_USER} to manage ciadpi services without password
 polkit.addRule(function(action, subject) {
     if (action.id == "org.freedesktop.systemd1.manage-units" &&
         subject.user == "${TARGET_USER}" &&
-        action.lookup("unit") == "ciadpi.service") {
+        (action.lookup("unit") == "ciadpi.service" ||
+         action.lookup("unit") == "ciadpi-nfqws.service")) {
         return polkit.Result.YES;
     }
 });

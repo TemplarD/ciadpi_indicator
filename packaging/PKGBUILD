@@ -2,9 +2,9 @@
 # CIADPI Indicator — системный трей для управления byedpi (ciadpi)
 
 pkgname=ciadpi-indicator
-pkgver=1.6.4
+pkgver=1.7.0
 pkgrel=1
-pkgdesc="System tray indicator for CIADPI/byedpi DPI bypass (RU/EN, builder, strategy search)"
+pkgdesc="System tray indicator for CIADPI/byedpi DPI bypass (RU/EN, dual engine: byedpi/nfqws, until-found search)"
 arch=('any')
 url="https://github.com/TemplarD/ciadpi_indicator"
 license=('MIT')
@@ -18,6 +18,8 @@ depends=(
 optdepends=(
     'byedpi: DPI bypass core (или соберите в ~/byedpi через скриптовый установщик)'
     'polkit: беспарольное управление сервисом'
+    'nftables: движок nfqws (zapret NFQUEUE) — второй движок обхода'
+    'zapret-git: исходники nfqws (клонируйте в ~/zapret, меню «Движок обхода»)'
 )
 makedepends=('git')
 source=("${pkgname}-${pkgver}.tar.gz::https://github.com/TemplarD/ciadpi_indicator/archive/refs/tags/v${pkgver}.tar.gz")
@@ -39,6 +41,7 @@ package() {
         ciadpi_autosearch.py \
         ciadpi_param_generator.py \
         ciadpi_whitelist.py \
+        ciadpi_nfqws.py \
         diagnose_ciadpi.py
     do
         [ -f "$f" ] && install -Dm644 "$f" "${pkgdir}${_moddir}/$f"
