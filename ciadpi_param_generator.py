@@ -81,6 +81,37 @@ class AdvancedParamGenerator:
             "-T3 -A torst -o4 -o25+s -r 1+s"
         ]
 
+        # ⭐ Стратегии против SNI-фильтрации (YouTube-класс): DPI рвёт
+        # TLS по имени сервера. Работают разбиение/переупорядочивание
+        # ClientHello в зоне SNI, tlsrec в несколько записей, fake-пакеты.
+        self.sni_fighting = [
+            # split по границе SNI
+            "-A torst -s 1+s -d 2+s",
+            "-A torst -s 2+s -r 1+s",
+            "-A torst -d 1+s -d 2+s",
+            "-A torst -s 1+sm -d 1+hm",
+            # tlsrec: ClientHello в нескольких TLS-записях
+            "-A torst -r 1 -r 2+s",
+            "-A torst -r 1+s -s 1",
+            "-A torst -r 2+s -d 2+s",
+            # fake-пакеты + oob
+            "-A torst -f 1+s -t 8",
+            "-A torst -f 2+s -t 8 -o1",
+            "-A torst -f 1+s -Q r",
+            "-A torst -f 1+sm -Q r -o1",
+            # oob/disorder комбинации
+            "-A torst -o1 -o2+s -d 1+s",
+            "-A torst -q 1+s -d 1+s",
+            # сочетание tlsrec + fake
+            "-A torst -r 1+s -f 2+s -t 8",
+            "-A torst -r 1+s -f 1+sm -Q o",
+            # двойной tlsrec + disorder
+            "-A torst -r 1+s -r 2+s -d 1+s",
+            # разрядка: disorder в начало ClientHello
+            "-A torst -d 0 -d 1+s",
+            "-A torst -s 0 -s 1+s",
+        ]
+
     def generate_split_params(self) -> List[str]:
         """Генерация параметров split"""
         params = []
@@ -119,6 +150,10 @@ class AdvancedParamGenerator:
         
         # Добавляем известные рабочие комбинации
         combinations.extend(self.known_working)
+
+        # ⭐ SNI-стратегии: первыми в очередь — против DPI, рвущего
+        # TLS по имени сервера (youtube и подобные)
+        combinations.extend(getattr(self, 'sni_fighting', []))
         
         # Базовые комбинации с методами обхода
         for _ in range(count // 2):
@@ -134,12 +169,15 @@ class AdvancedParamGenerator:
             ]
             
             # Дополнительные параметры (1-2 случайных)
+            # ⭐ было random.choice(['1+s','2+s','3+s']) — голое значение
+            # без флага попадало в строку ('-r 5 3+s' — битый токен),
+            # ciadpi такое отвергает. Теперь только полные пары.
             additional_params = random.sample([
                 random.choice(self.all_params['split']),
                 random.choice(self.all_params['disorder']),
                 random.choice(self.all_params['fake']),
                 random.choice(self.all_params['mod_http']),
-                random.choice(['1+s', '2+s', '3+s'])
+                f"-r {random.randint(1, 5)}+s",
             ], random.randint(1, 2))
             
             combo = ' '.join(methods + base_params + additional_params)

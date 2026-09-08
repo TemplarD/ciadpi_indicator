@@ -125,14 +125,54 @@ class StrategySearcher:
             "-T2 -A torst -o5 -o25+s -r 1+s",
             "-T3 -A torst -o9 -o13+s -r 2+s",
             "-T3 -A torst -o1 -o2 -o25+s -r 1+s",
+            # ⭐ SNI-класс (DPI рвёт TLS по имени: youtube и т.п.)
+            "-A torst -r 1+s -s 1",
+            "-A torst -s 1+s -d 2+s",
+            "-A torst -r 1+s -r 2+s -d 1+s",
+            "-A torst -f 1+s -t 8",
+            "-A torst -r 1+s -f 2+s -t 8",
+            "-A torst -d 1+s -d 2+s",
         ]
         combos.extend(known_working)
 
         # Успешные из истории (без повторов)
+        # ⭐ фильтр мусора: старые записи содержали битые токены
+        # (голое '3+s' без флага: '-T 3   3+s') — ciadpi их отвергает,
+        # а поиск тратил на них слоты. Прогоняем через строгий парсер.
+        import re as _re
+        _VAL_FLAGS = {'-i', '-p', '-w', '-c', '-I', '-b', '-g', '-T', '-A',
+                      '-L', '-u', '-K', '-H', '-j', '-V', '-R', '-s', '-d',
+                      '-o', '-q', '-f', '-r', '-n', '-t', '-O', '-l', '-Q',
+                      '-e', '-a', '-M', '-m', '-y', '-x'}
+
+        def _tokens_clean(params_str):
+            """True если каждый токен — валидный флаг или значение флага."""
+            toks = params_str.split()
+            i = 0
+            while i < len(toks):
+                tk = toks[i]
+                if tk in _VAL_FLAGS:
+                    # раздельный флаг: следующее может быть значением
+                    if i + 1 < len(toks) and not toks[i + 1].startswith('-'):
+                        i += 2
+                    else:
+                        i += 1
+                    continue
+                if _re.match(r'^-[A-Za-z]', tk):
+                    # прикреплённая форма (-T3, -At, -o1+s...) или bool-флаг
+                    i += 1
+                    continue
+                return False  # голое значение без флага — мусор
+            return True
+
         for t in self.history["tests"]:
             p = t.get("params")
-            if t.get("success") and p and p not in combos:
-                combos.append(p)
+            if not (t.get("success") and p and p not in combos):
+                continue
+            if not _tokens_clean(p):
+                print(f"⚠️ История: пропущена битая строка: {p!r}")
+                continue
+            combos.append(p)
 
         # Новые из генератора
         if _GENERATOR_AVAILABLE and AdvancedParamGenerator is not None:
@@ -149,9 +189,38 @@ class StrategySearcher:
 
     # ---------------- Тестирование ----------------
 
+    def _doh_resolve(self, hostname, timeout=6):
+        """Резолв через DNS-over-HTTPS (dns.google).
+
+        ⭐ Провайдерский DNS часто режет youtube (NXDOMAIN/заглушка) —
+        обычный резолв даёт ложный FAIL стратегии. DoH работает поверх
+        HTTPS и не фильтруется. Возвращает IP | None.
+        """
+        try:
+            r = subprocess.run(
+                ['curl', '-s', '--max-time', str(timeout),
+                 f'https://dns.google/resolve?name={hostname}&type=A'],
+                capture_output=True, text=True, timeout=timeout + 2)
+            if r.returncode == 0 and r.stdout.strip().startswith('{'):
+                import json
+                data = json.loads(r.stdout)
+                answers = [a.get('data') for a in data.get('Answer', [])
+                           if a.get('type') == 1 and a.get('data')]
+                if answers:
+                    return answers[0]
+        except Exception:
+            pass
+        return None
+
     def test_connection(self, test_urls, timeout=8):
         """Проверка доступности URLs через тестовый прокси.
-        Возвращает (ok_count, total, avg_speed, details)."""
+
+        ⭐ Для хостов, которых нет в системном DNS (провайдер режет),
+        резолвим через DoH и подключаемся ПО IP с сохранением SNI
+        (curl --resolve) — иначе тест валится на DNS-этапе и не
+        показывает, работает ли сам обход TLS.
+        Возвращает (ok_count, total, avg_speed, details).
+        """
         ok_count = 0
         speeds = []
         details = []
@@ -162,12 +231,34 @@ class StrategySearcher:
         for url in test_urls:
             start = time.time()
             try:
+                # --resolve: если системный DNS не знает хост — берём IP
+                # из DoH и подставляем (SNI/Host остаются прежними)
+                extra = []
+                try:
+                    from urllib.parse import urlparse
+                    host = urlparse(url).hostname
+                    if host and not host.replace('.', '').isdigit() \
+                            and not host.startswith('['):
+                        # проверяем системный резолв
+                        probe = subprocess.run(
+                            ['getent', 'hosts', host],
+                            capture_output=True, timeout=4)
+                        if probe.returncode != 0:
+                            ip = self._doh_resolve(host)
+                            if ip:
+                                extra = ['--resolve', f'{host}:443:{ip}']
+                                print(f"📡 {host}: системный DNS пуст, "
+                                      f"DoH → {ip} (тестируем SNI по IP)")
+                except Exception:
+                    pass
+
                 r = subprocess.run(
                     ['curl', '-s', '-o', '/dev/null', '-w', '%{http_code}',
-                     '-x', env_proxy_url,
-                     '--connect-timeout', str(min(timeout, 5)),
-                     '--max-time', str(timeout),
-                     url],
+                     '-x', env_proxy_url]
+                    + extra
+                    + ['--connect-timeout', str(min(timeout, 5)),
+                       '--max-time', str(timeout),
+                       url],
                     capture_output=True, text=True, timeout=timeout + 2
                 )
                 spent = time.time() - start

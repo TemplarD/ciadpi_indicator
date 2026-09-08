@@ -724,11 +724,21 @@ class AdvancedTrayIndicator:
 
             if status_result.stdout.strip() == 'active':
                 print("✅ Параметры успешно обновлены")
-                # Применяем наши настройки прокси к новому сервису
-                if apply_proxy and self.current_params.get("proxy_enabled"):
+                # ⭐ Применяем системный прокси ТОЛЬКО в manual-режиме
+                # (раньше применялся и в local — «система сама включилась
+                # ручным» после смены параметров/поиска стратегии) —
+                # и с корректным бэкапом исходных настроек ДО apply.
+                if (apply_proxy
+                        and self.current_params.get("proxy_enabled")
+                        and self.current_params.get("proxy_mode") == 'manual'):
                     host = self.current_params.get("proxy_host", "")
                     port = self.current_params.get("proxy_port", "1080")
                     try:
+                        # бэкап ДО применения (см. save_system_proxy_backup)
+                        if not self.we_changed_proxy:
+                            self.save_system_proxy_backup()
+                            self.we_changed_proxy = True
+                            self.save_config()
                         self.apply_system_proxy('manual', host, port)
                     except Exception as e:
                         print(f"⚠️ Прокси не применён после обновления: {e}")
@@ -1423,11 +1433,19 @@ class AdvancedTrayIndicator:
 
             # ⭐ ЛОГИКА УПРАВЛЕНИЯ ПРОКСИ (ВСЕ В ОДНОМ МЕСТЕ)
             restored_original = False
-            if selected_mode == 'manual' and not self.we_changed_proxy:
-                # ВКЛЮЧАЕМ ПРОКСИ ВПЕРВЫЕ
-                self.save_system_proxy_backup()
-                self.we_changed_proxy = True
-                print("💾 Включен наш прокси, сохранены системные настройки")
+            if selected_mode == 'manual':
+                # ВКЛЮЧАЕМ НАШ ПРОКСИ В СИСТЕМЕ.
+                # ⭐ Бэкап обязателен: если флаг стоит, но бэкапа нет ни в
+                # памяти, ни на диске (остался от старого бага) — снимаем
+                # заново, иначе restore потом откатит «в никуда».
+                if not self.we_changed_proxy:
+                    self.save_system_proxy_backup()
+                    self.we_changed_proxy = True
+                    print("💾 Включен наш прокси, сохранены системные настройки")
+                elif not self.original_system_proxy and \
+                        not self._load_system_proxy_backup_from_disk():
+                    self.save_system_proxy_backup()
+                    print("💾 Флаг был, но бэкапа нет — снят заново")
             
             elif selected_mode == 'none' and self.we_changed_proxy:
                 # ОТКЛЮЧАЕМ ПРОКСИ — восстанавливаем оригинал
