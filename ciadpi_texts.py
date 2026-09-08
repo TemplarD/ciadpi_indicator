@@ -24,6 +24,45 @@ HELP_TEXTS = {
     • Готовые проверенные примеры конфигураций
     • История тестирования
 
+    ♾️ ПОИСК «ДО НАХОЖДЕНИЯ» (v1.7+):
+
+    Чекбокс «Искать до нахождения» в диалоге поиска отключает лимит
+    попыток. Перебор продолжается, пока какая-нибудь комбинация НЕ
+    ОТКРОЕТ ВСЕ указанные URL — частичный доступ (например, google
+    работает, youtube нет) успехом НЕ считается, поиск идёт дальше.
+    Остановить можно кнопкой «Остановить» или закрытием окна.
+
+    «Мин. попыток» — нижний предел: даже если все URL открылись на
+    первой же комбинации, поиск проверит ещё несколько (защита от
+    случайного результата), после предела первый же ПОЛНЫЙ успех
+    останавливает перебор. Итог — самая быстрая комбинация из
+    прошедших все URL.
+
+    Комбинации не кончаются: после известного набора и истории
+    генератор выдаёт новые волны (60/120/180…), без повторов.
+
+    🐟 ДВА ДВИЖКА ОБХОДА (v1.7+):
+
+    Меню «Движок обхода» — ползунок с двумя положениями:
+
+    • byedpi (слева) — SOCKS5-прокси на 127.0.0.1. Обходится только
+      трафик, явно направленный в прокси (системный/ручной режим).
+      Приложения нужно настраивать на прокси.
+
+    • nfqws (справа) — перехват пакетов через NFQUEUE: правила
+      nftables заворачивают первые пакеты ВСЕХ исходящих TCP-соединений
+      (порты 80/443) в очередь, nfqws искажает их (desync). НИКАКОЙ
+      настройки приложений не нужно — работает для всей машины.
+
+    Движки взаимоисключающие: nfqws перехватил бы и трафик byedpi
+    (двойное искажение ломает соединения). Переключатель сам
+    останавливает другой движок и снимает его настройки.
+
+    При активном nfqws пункты, применимые только к byedpi (настройки
+    параметров, конструктор, прокси, поиск стратегии), становятся
+    серыми. Параметры nfqws — в «Движок обхода → Параметры nfqws»
+    (формат zapret: --dpi-desync=…, с примерами и проверкой).
+
     ⭐ ГЛАВНЫЙ ПРИНЦИП РАБОТЫ:
 
     Параметры ДЕСИНХРОНИЗАЦИИ (обхода), указанные ПОСЛЕ -A,
@@ -141,6 +180,44 @@ HELP_TEXTS = {
     • Brute-force strategy search (menu "Strategy search")
     • Ready-made verified configuration examples
     • Test history
+
+    ♾️ UNTIL-FOUND SEARCH (v1.7+):
+
+    The "Search until found" checkbox removes the attempt limit.
+    The search keeps going until a combination opens ALL listed URLs —
+    partial access (e.g. google works, youtube does not) does NOT
+    count as success and the search continues. Stop it with the
+    "Stop" button or by closing the window.
+
+    "Min attempts" is a floor: even if all URLs open on the very
+    first combination, a few more are checked (protection against a
+    fluke); after the floor the first FULL success stops the search.
+    The result is the fastest combination that passed every URL.
+
+    Combinations never run out: after the known set and history the
+    generator produces new waves (60/120/180...), no repeats.
+
+    🐟 TWO BYPASS ENGINES (v1.7+):
+
+    Menu "Bypass engine" — a toggle with two positions:
+
+    • byedpi (left) — SOCKS5 proxy on 127.0.0.1. Only traffic sent
+      into the proxy is bypassed (system/manual mode). Applications
+      must be configured to use the proxy.
+
+    • nfqws (right) — packet interception via NFQUEUE: nftables
+      rules direct the first packets of ALL outgoing TCP connections
+      (ports 80/443) into a queue, nfqws distorts them (desync).
+      NO application configuration is needed — works machine-wide.
+
+    The engines are mutually exclusive: nfqws would also intercept
+    byedpi's traffic (double distortion breaks connections). The
+    switch stops the other engine and removes its settings itself.
+
+    While nfqws is active, byedpi-only menu items (parameter
+    settings, builder, proxy, strategy search) are greyed out.
+    nfqws parameters live in "Bypass engine → nfqws parameters"
+    (zapret format: --dpi-desync=..., with examples and validation).
 
     ⭐ THE KEY OPERATING PRINCIPLE:
 

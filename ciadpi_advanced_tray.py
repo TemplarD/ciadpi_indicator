@@ -1070,34 +1070,56 @@ class AdvancedTrayIndicator:
         # Настройки
         settings_item = Gtk.MenuItem(label=t('menu.settings'))
         settings_item.connect("activate", self.show_settings)
+        # ⭐ Параметры в «Настройках» — byedpi-специфичные (формат -T3 -A…):
+        # при активном nfqws они неприменимы, пункт серый
+        if NFQWS_AVAILABLE and self.nfqws and self._active_engine() == 'nfqws':
+            settings_item.set_sensitive(False)
+            settings_item.set_tooltip_text(t('engine.byedpi_only'))
         menu.append(settings_item)
 
-        # ⭐ Движок обхода: byedpi (SOCKS) ↔ nfqws (NFQUEUE)
+        # ⭐ Движок обхода: ползунок byedpi ↔ nfqws прямо в меню.
+        # Переключатель показывает текущее состояние (не нужно раскрывать
+        # подменю), один клик = переключение движка.
         if NFQWS_AVAILABLE and self.nfqws:
-            engine_item = Gtk.MenuItem(label=t('engine.menu'))
-            engine_menu = Gtk.Menu()
-
             active_engine = self._active_engine()
-            radio_byedpi = Gtk.RadioMenuItem(label=t('engine.byedpi'))
-            radio_nfqws = Gtk.RadioMenuItem.new_from_widget(radio_byedpi)
-            radio_nfqws.set_label(t('engine.nfqws'))
-            radio_byedpi.set_active(active_engine != 'nfqws')
-            radio_nfqws.set_active(active_engine == 'nfqws')
-            radio_byedpi.connect("activate",
-                                 lambda w: w.get_active()
-                                 and self.switch_engine(w, 'byedpi'))
-            radio_nfqws.connect("activate",
-                               lambda w: w.get_active()
-                               and self.switch_engine(w, 'nfqws'))
-            engine_menu.append(radio_byedpi)
-            engine_menu.append(radio_nfqws)
+            engine_item = Gtk.MenuItem(label=t('engine.menu'))
+            engine_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            engine_box.set_margin_top(4); engine_box.set_margin_bottom(4)
+            engine_box.set_margin_start(12); engine_box.set_margin_end(12)
+
+            lbl_byedpi = Gtk.Label(label=t('engine.byedpi_short'))
+            lbl_nfqws = Gtk.Label(label=t('engine.nfqws_short'))
+            engine_switch = Gtk.Switch()
+            engine_switch.set_active(active_engine == 'nfqws')
+            engine_switch.set_tooltip_text(t('engine.switch_hint'))
+
+            engine_box.pack_start(lbl_byedpi, False, False, 0)
+            engine_box.pack_start(engine_switch, False, False, 0)
+            engine_box.pack_start(lbl_nfqws, False, False, 0)
+            sw_item = Gtk.MenuItem()
+            sw_item.add(engine_box)
+            # клик по всей строке тоже переключает
+            sw_item.connect("activate",
+                            lambda w: engine_switch.set_active(
+                                not engine_switch.get_active()))
+
+            def on_engine_switch(widget, state):
+                want = 'nfqws' if state else 'byedpi'
+                if want != self._active_engine():
+                    # откатываем визуально — реальное состояние вернёт
+                    # switch_engine после перезапуска сервисов + rebuild_menu
+                    GLib.idle_add(self.switch_engine, None, want)
+            engine_switch.connect("state-set", on_engine_switch)
+
+            engine_menu = Gtk.Menu()
+            engine_menu.append(sw_item)
             engine_menu.append(Gtk.SeparatorMenuItem())
 
             engine_hint = Gtk.MenuItem(
                 label=t('engine.hint_state').format(
                     st=('nfqws 🟢' if active_engine == 'nfqws'
                         else ('byedpi 🟢' if active_engine == 'byedpi'
-                              else '—'))))
+                              else '🔴'))))
             engine_hint.set_sensitive(False)
             engine_menu.append(engine_hint)
 
@@ -1107,17 +1129,33 @@ class AdvancedTrayIndicator:
 
             engine_item.set_submenu(engine_menu)
             menu.append(engine_item)
+            # ⭐ ползунок живёт в меню: меню должно показать его состояние.
+            # self._engine_switch хранит ссылку для синка в update_status
+            self._engine_switch = engine_switch
+
+        # ⭐ ПРИ NFQWS: byedpi-специфичные пункты — серые (неактивны),
+        # универсальные (справка, настройки приложения, логи, права,
+        # о программе) — активны всегда.
+        engine_is_nfqws = (NFQWS_AVAILABLE and self.nfqws
+                           and self._active_engine() == 'nfqws')
 
         if PARAMS_SPEC_AVAILABLE:
             builder_item = Gtk.MenuItem(label=t('menu.builder'))
             builder_item.connect("activate", self.show_param_builder)
+            if engine_is_nfqws:
+                builder_item.set_sensitive(False)
+                builder_item.set_tooltip_text(t('engine.byedpi_only'))
             menu.append(builder_item)
 
         proxy_item = Gtk.MenuItem(label=t('menu.proxy'))
         proxy_item.connect("activate", self.show_proxy_settings)
+        if engine_is_nfqws:
+            proxy_item.set_sensitive(False)
+            proxy_item.set_tooltip_text(t('engine.nfqws_no_proxy'))
         menu.append(proxy_item)
 
-        # БЕЛЫЙ СПИСОК
+        # БЕЛЫЙ СПИСОК (универсален: перечень «своих» хостов, nfqws
+        # сейчас его не использует, но он пригодится при расширении)
         whitelist_item = Gtk.MenuItem(label=t('menu.whitelist'))
         whitelist_item.connect("activate", self.show_whitelist_dialog)
         menu.append(whitelist_item)        
@@ -1136,9 +1174,13 @@ class AdvancedTrayIndicator:
 
             menu.append(Gtk.SeparatorMenuItem())
 
-        # Поиск стратегии (перебор параметров)
+        # Поиск стратегии: перебирает ПАРАМЕТРЫ byedpi — при nfqws
+        # серый (найденные параметры всё равно применимы только к byedpi)
         strategy_item = Gtk.MenuItem(label=t('menu.strategy'))
         strategy_item.connect("activate", self.show_strategy_search)
+        if engine_is_nfqws:
+            strategy_item.set_sensitive(False)
+            strategy_item.set_tooltip_text(t('engine.byedpi_only'))
         menu.append(strategy_item)
 
         # Обновление byedpi без переустановки
@@ -1184,25 +1226,48 @@ class AdvancedTrayIndicator:
 
     def update_status(self):
         try:
-            result = subprocess.run(
-                ['systemctl', 'is-active', 'ciadpi.service'],
-                capture_output=True, text=True, timeout=2
-            )
+            # ⭐ Статус — АКТИВНОГО движка: при включённом nfqws следим
+            # за ciadpi-nfqws.service, иначе за классическим ciadpi.service
+            engine = (self._active_engine() if NFQWS_AVAILABLE and self.nfqws
+                      else 'byedpi')
+            if engine == 'nfqws':
+                result = subprocess.run(
+                    ['systemctl', 'is-active', 'ciadpi-nfqws.service'],
+                    capture_output=True, text=True, timeout=2
+                )
+            else:
+                result = subprocess.run(
+                    ['systemctl', 'is-active', 'ciadpi.service'],
+                    capture_output=True, text=True, timeout=2
+                )
             status = result.stdout.strip()
-            
+
             current_params = self.get_current_service_params()
-            status_text = t('status.running') if status == 'active' else t('status.stopped')
+            if engine == 'nfqws':
+                status_text = (t('status.running_nfqws') if status == 'active'
+                               else t('status.stopped'))
+            else:
+                status_text = t('status.running') if status == 'active' else t('status.stopped')
 
             # Метку статуса обновляем ВСЕГДА (и в AppIndicator-режиме,
             # и в fallback Gtk.StatusIcon, и без индикатора вовсе) —
             # раньше без индикатора меню зависало с «Проверка статуса...»
             if status == 'active':
-                status_label = t('status.running_s')
+                status_label = (t('status.running_s_nfqws') if engine == 'nfqws'
+                                else t('status.running_s'))
             else:
                 status_label = t('status.stopped_s')
 
             if hasattr(self, 'status_item') and self.status_item:
                 self.status_item.set_label(status_label)
+
+            # ⭐ синк ползунка движка (меню создаётся заново редко)
+            sw = getattr(self, '_engine_switch', None)
+            if sw is not None:
+                try:
+                    sw.set_active(engine == 'nfqws')
+                except Exception:
+                    pass
 
             if hasattr(self, 'indicator') and self.indicator:
                 if status == 'active':
@@ -2175,7 +2240,29 @@ class AdvancedTrayIndicator:
         threading.Thread(target=run_in_thread, daemon=True).start()
 
     def start_service(self, widget):
-        """Запуск сервиса с восстановлением наших настроек"""
+        """Запуск сервиса с восстановлением наших настроек.
+
+        ⭐ Управляет АКТИВНЫМ движком: при включённом nfqws стартует
+        ciadpi-nfqws.service (у byedpi-сервиса своих прокси-настроек нет).
+        """
+        # nfqws-движок активен → управляем им
+        nfq = self.nfqws  # локальная ссылка: внутри потока self может уйти
+        if NFQWS_AVAILABLE and nfq and self._active_engine() == 'nfqws':
+            def start_nfqws():
+                ok, err = nfq.start()
+                if ok:
+                    self.show_notification(
+                        t('notif.success'), t('status.running_nfqws'),
+                        category='service')
+                else:
+                    self.show_notification(t('notif.error'),
+                                           err or 'start failed',
+                                           category='service')
+                self.update_status()
+                self.rebuild_menu()
+            threading.Thread(target=start_nfqws, daemon=True).start()
+            return
+
         def start_with_proxy_restore():
             try:
                 # Запускаем сервис через универсальный _systemctl
@@ -2219,7 +2306,30 @@ class AdvancedTrayIndicator:
         threading.Thread(target=start_with_proxy_restore, daemon=True).start()
 
     def stop_service(self, widget):
-        """Остановка сервиса с правильным управлением прокси"""
+        """Остановка сервиса с правильным управлением прокси.
+
+        ⭐ Управляет АКТИВНЫМ движком: при включённом nfqws останавливает
+        ciadpi-nfqws.service (и его nft-правила; прокси-откат не нужен —
+        nfqws прокси не использует).
+        """
+        # nfqws-движок активен → управляем им
+        nfq = self.nfqws
+        if NFQWS_AVAILABLE and nfq and self._active_engine() == 'nfqws':
+            def stop_nfqws():
+                ok, err = nfq.stop()
+                if ok:
+                    self.show_notification(t('notif.service_stopped'),
+                                           t('proxy.mode_off'),
+                                           category='service')
+                else:
+                    self.show_notification(t('notif.error'),
+                                           err or 'stop failed',
+                                           category='service')
+                self.update_status()
+                self.rebuild_menu()
+            threading.Thread(target=stop_nfqws, daemon=True).start()
+            return
+
         if self.current_params.get("auto_disable_proxy", False) and self.we_changed_proxy:
             # Автоотключение включено И мы меняли прокси
             def stop_with_proxy_restore():
@@ -2256,6 +2366,23 @@ class AdvancedTrayIndicator:
             self.run_command("systemctl stop ciadpi.service")
 
     def restart_service(self, widget):
+        """Перезапуск АКТИВНОГО движка (nfqws или byedpi)."""
+        nfq = self.nfqws
+        if NFQWS_AVAILABLE and nfq and self._active_engine() == 'nfqws':
+            def restart_nfqws():
+                ok, err = nfq.stop()
+                ok2, err2 = nfq.start()
+                if ok and ok2:
+                    self.show_notification(t('notif.success'),
+                                           t('status.running_nfqws'),
+                                           category='service')
+                else:
+                    self.show_notification(t('notif.error'),
+                                           (err2 or err or 'restart failed'),
+                                           category='service')
+                self.update_status()
+            threading.Thread(target=restart_nfqws, daemon=True).start()
+            return
         self.run_command("systemctl restart ciadpi.service")
 
     # ---------------- Переключатель движка: byedpi ↔ nfqws ----------------
@@ -2991,6 +3118,10 @@ class AdvancedTrayIndicator:
             if r['success']:
                 ui_log(f"[{idx}] ✅ {r['urls_ok']}/{r['urls_total']} URL, "
                        f"{t('search.avg_speed')} {r['speed']:.2f}s | {r['params']}")
+            elif r['urls_ok'] > 0:
+                # частичный доступ: ясно даём понять, что это НЕ успех
+                ui_log(f"[{idx}] ⛔ {t('search.partial')}: "
+                       f"{r['urls_ok']}/{r['urls_total']} URL | {r['params']}")
             else:
                 err = (r.get('error') or '')[:120]
                 ui_log(f"[{idx}] ❌ {err} | {r['params']}")

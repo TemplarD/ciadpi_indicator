@@ -88,7 +88,11 @@ class StrategySearcher:
             print(f"⚠️ Не удалось сохранить историю стратегий: {e}")
 
     def add_to_history(self, entry):
-        """entry: {params, success, speed, urls_ok, urls_total, error}"""
+        """entry: {params, success, speed, urls_ok, urls_total, error}
+
+        ⭐ success с v1.8 = ВСЕ URL доступны. Частичный (2/3) — не успех:
+        в until-found-режиме такой результат не должен останавливать поиск.
+        """
         entry['timestamp'] = datetime.now().isoformat(timespec='seconds')
         self.history["tests"].insert(0, entry)
         # Храним последние 200 записей
@@ -365,15 +369,19 @@ class StrategySearcher:
         try:
             ok, total, speed, details = self.test_connection(test_urls, timeout)
             result.update({
-                'success': ok > 0,
+                'success': ok == total and total > 0,
                 'speed': speed,
                 'urls_ok': ok,
                 'urls_total': total,
                 'details': details
             })
-            if ok == 0:
+            if not result['success']:
                 # Пробуем понять причину через stderr
-                result['error'] = 'Все тестовые URL недоступны'
+                if ok > 0:
+                    result['error'] = (f'Частичный успех: {ok}/{total} URL '
+                                      f'(успехом считается ТОЛЬКО все URL)')
+                else:
+                    result['error'] = 'Все тестовые URL недоступны'
         finally:
             self._stop_current()
 
