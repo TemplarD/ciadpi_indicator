@@ -74,6 +74,19 @@ log_step "Step 1/8: Stopping CIADPI processes"
 pkill -f "ciadpi_advanced_tray.py" 2>/dev/null && log_info "✓ indicator stopped" || log_info "indicator not running"
 pkill -f "byedpi/ciadpi" 2>/dev/null && log_info "✓ byedpi/ciadpi stopped" || log_info "ciadpi binary not running"
 
+# ⭐ nfqws-движок (v1.7+): стоп юнита, disable, nft-таблица inet ciadpi,
+# юнит-файл — иначе обход останется работать в системе после удаления
+if systemctl list-unit-files 2>/dev/null | grep -q '^ciadpi-nfqws\.service'; then
+    if systemctl is-active --quiet ciadpi-nfqws.service 2>/dev/null; then
+        sudo systemctl stop ciadpi-nfqws.service && log_info "✓ ciadpi-nfqws stopped"
+    fi
+    sudo systemctl disable ciadpi-nfqws.service 2>/dev/null || true
+    sudo systemctl reset-failed ciadpi-nfqws.service 2>/dev/null || true
+    log_info "✓ ciadpi-nfqws unit disabled"
+fi
+sudo nft delete table inet ciadpi 2>/dev/null && log_info "✓ nft table inet ciadpi removed" || true
+sudo rm -f /etc/systemd/system/ciadpi-nfqws.service
+
 # Step 2: Stop and disable SYSTEMD service (system-level, как в v2.1)
 log_step "Step 2/8: Stopping systemd service"
 

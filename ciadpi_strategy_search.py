@@ -515,11 +515,361 @@ class StrategySearcher:
         return best_params, best_result
 
 
+# ---------------- Поиск стратегии для nfqws-движка ----------------
+
+class NfqwsStrategySearcher:
+    """Перебор параметров nfqws (формат zapret) ЧЕРЕЗ РЕАЛЬНЫЙ сервис.
+
+    В отличие от byedpi-поиска (отдельный тестовый SOCKS-порт), nfqws
+    перехватывает пакеты ГЛОБАЛЬНО через NFQUEUE — тестовый инстанс
+    конфликтовал бы с рабочим по qnum. Поэтому каждая комбинация:
+      1) write_unit(params) + start сервиса (passwordless sudo, уже
+         настроено) — сервис обслуживает ВСЕ приложения;
+      2) проверка test-URLs напрямую (без прокси): DoH-резолв при
+         NXDOMAIN + curl --resolve (SNI честный);
+      3) stop сервиса (nft-правила снимает ExecStopPost).
+    Пауза между кандидами минимальна — интернет «мигает» только на
+    секунды между stop и следующим start.
+
+    Успех = ВСЕ test-URLs отвечают (как в byedpi-поиске с v1.8).
+    """
+
+    def __init__(self):
+        from ciadpi_nfqws import NfqwsManager
+        self.mgr = NfqwsManager()
+        self.config_dir = Path.home() / '.config' / 'ciadpi'
+        self.history_file = self.config_dir / 'nfqws_strategy_history.json'
+
+        self.default_test_urls = [
+            "https://www.youtube.com",
+            "https://www.google.com/generate_204",
+            "https://github.com",
+        ]
+
+        self.is_searching = False
+        self.stop_requested = False
+
+        # Лог — отдельный файл, чтобы не смешивать с byedpi-поиском
+        self.logger = logging.getLogger('ciadpi_nfqws_strategy')
+        if not self.logger.handlers:
+            self.logger.setLevel(logging.INFO)
+            try:
+                self.config_dir.mkdir(exist_ok=True)
+                fh = logging.FileHandler(self.config_dir / 'nfqws_strategy.log',
+                                         encoding='utf-8')
+                fh.setFormatter(logging.Formatter(
+                    '%(asctime)s - %(levelname)s - %(message)s'))
+                self.logger.addHandler(fh)
+            except Exception:
+                pass
+
+        self.history = self._load_history()
+
+    # ---------------- История ----------------
+
+    def _load_history(self):
+        default = {"tests": [], "best": None}
+        try:
+            self.history_file.parent.mkdir(parents=True, exist_ok=True)
+            if self.history_file.exists():
+                with open(self.history_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+        except Exception as e:
+            print(f"⚠️ История nfqws-поиска не загружена: {e}")
+        return default
+
+    def _save_history(self):
+        try:
+            with open(self.history_file, 'w', encoding='utf-8') as f:
+                json.dump(self.history, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"⚠️ Не удалось сохранить историю nfqws-поиска: {e}")
+
+    def add_to_history(self, entry):
+        entry['timestamp'] = datetime.now().isoformat(timespec='seconds')
+        entry['engine'] = 'nfqws'
+        self.history["tests"].insert(0, entry)
+        del self.history["tests"][200:]
+        if entry['success']:
+            prev = self.history.get("best")
+            if not prev or entry['speed'] < prev.get('speed', float('inf')):
+                self.history["best"] = {
+                    'params': entry['params'], 'engine': 'nfqws',
+                    'speed': round(entry['speed'], 2),
+                    'timestamp': entry['timestamp']
+                }
+        self._save_history()
+
+    # ---------------- Комбинации (zapret-формат) ----------------
+
+    def generate_combinations(self):
+        """Матрица кандидатов: от простых к мощным.
+
+        Порядок подобран эмпирически (Flowseal-рецепты + zapret-доки):
+        простые сплиты → disorder → fake TLS (мод rndsni — свежий SNI
+        в каждом фейке) → комбо. Fake-файлы — из zapret/files/fake;
+        если файла нет, кандидат с ним пропускаем.
+        """
+        from pathlib import Path as _P
+        fake_dir = _P.home() / 'zapret' / 'files' / 'fake'
+        tls = fake_dir / 'tls_clienthello_www_google_com.bin'
+
+        def has(p):
+            return p and _P(p).exists()
+
+        combos = [
+            # --- базовые (без fake-файлов) ---
+            "--filter-tcp=443 --dpi-desync=split2 --dpi-desync-split-pos=1",
+            "--filter-tcp=443 --dpi-desync=disorder2 --dpi-desync-split-pos=1",
+            "--filter-tcp=443 --dpi-desync=disorder",
+            "--filter-tcp=80,443 --dpi-desync=disorder2 --dpi-desync-split-pos=1",
+            "--filter-tcp=443 --dpi-desync=multisplit --dpi-desync-split-pos=1,2",
+            # --- fake TLS ---
+            f"--filter-tcp=443 --dpi-desync=fake,disorder2 "
+            f"--dpi-desync-fake-tls={tls}",
+            f"--filter-tcp=443 --dpi-desync=fake,split2 "
+            f"--dpi-desync-split-pos=1 --dpi-desync-fake-tls={tls}",
+            f"--filter-tcp=443 --dpi-desync=fakedsplit "
+            f"--dpi-desync-split-pos=1 --dpi-desync-fake-tls={tls}",
+            # --- fake с рандомным SNI (свежий фейк каждый раз) ---
+            f"--filter-tcp=443 --dpi-desync=fake,disorder2 "
+            f"--dpi-desync-fake-tls={tls} --dpi-desync-fake-tls-mod=rndsni",
+            f"--filter-tcp=443 --dpi-desync=fake,split2 "
+            f"--dpi-desync-split-pos=1 --dpi-desync-fake-tls={tls} "
+            f"--dpi-desync-fake-tls-mod=rndsni",
+            # --- hostfakesplit (SNI-зависимые провы) ---
+            f"--filter-tcp=443 --dpi-desync=hostfakesplit "
+            f"--dpi-desync-fake-tls={tls}",
+            # --- fooling-надстройки ---
+            f"--filter-tcp=443 --dpi-desync=fake,disorder2 "
+            f"--dpi-desync-fake-tls={tls} --dpi-desync-fooling=md5sig,badseq",
+            f"--filter-tcp=443 --dpi-desync=fake,disorder2 "
+            f"--dpi-desync-fake-tls={tls} --dpi-desync-fooling=ts",
+        ]
+        return [c for c in combos if 'fake-tls=' not in c or has(tls)]
+
+    # ---------------- Проверка соединения ----------------
+
+    def _doh_resolve(self, hostname, timeout=6):
+        """DoH-резолв (пров может давать NXDOMAIN на нужные хосты)."""
+        import urllib.request
+        try:
+            url = (f'https://1.1.1.1/dns-query?name={hostname}&type=A')
+            req = urllib.request.Request(url, headers={
+                'accept': 'application/dns-json'})
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = json.loads(resp.read().decode())
+                for ans in data.get('Answer', []):
+                    if ans.get('type') == 1:  # A-запись
+                        return ans['data']
+        except Exception:
+            pass
+        return None
+
+    def test_connection(self, test_urls, timeout=8):
+        """Проверка URLs НАПРЯМУЮ (nfqws перехватывает всё сам).
+
+        NXDOMAIN-хосты резолвим через DoH и подключаемся по IP с
+        честным SNI (curl --resolve) — так проверяем именно десинк,
+        а не DNS-блокировку.
+        Возвращает (ok_count, total, avg_speed, details).
+        """
+        ok_count = 0
+        speeds = []
+        details = []
+        for url in test_urls:
+            start = time.time()
+            try:
+                extra = []
+                try:
+                    from urllib.parse import urlparse
+                    host = urlparse(url).hostname
+                    if host and not host.replace('.', '').isdigit() \
+                            and not host.startswith('['):
+                        probe = subprocess.run(
+                            ['getent', 'hosts', host],
+                            capture_output=True, timeout=4)
+                        if probe.returncode != 0:
+                            ip = self._doh_resolve(host)
+                            if ip:
+                                extra = ['--resolve', f'{host}:443:{ip}']
+                                print(f"📡 {host}: системный DNS пуст, "
+                                      f"DoH → {ip} (тестируем SNI по IP)")
+                except Exception:
+                    pass
+                r = subprocess.run(
+                    ['curl', '-s', '-o', '/dev/null', '-w', '%{http_code}',
+                     '-A', 'Mozilla/5.0 (X11; Linux)', '--noproxy', '*']
+                    + extra
+                    + ['--connect-timeout', str(min(timeout, 5)),
+                       '--max-time', str(timeout), url],
+                    capture_output=True, text=True, timeout=timeout + 2
+                )
+                spent = time.time() - start
+                code = r.stdout.strip()
+                ok = r.returncode == 0 and code in ('200', '204', '206',
+                                                    '301', '302')
+            except Exception as e:
+                spent = time.time() - start
+                code = f"ERR:{e.__class__.__name__}"
+                ok = False
+            speeds.append(spent)
+            details.append((url, ok, code, round(spent, 2)))
+            if ok:
+                ok_count += 1
+        avg = sum(speeds) / len(speeds) if speeds else float('inf')
+        return ok_count, len(test_urls), avg, details
+
+    # ---------------- Тест одной комбинации ----------------
+
+    def test_params(self, params, test_urls, settle=1.5, timeout=8):
+        """Прогон одной комбинации через реальный ciadpi-nfqws.service.
+
+        Возвращает dict как StrategySearcher.test_params (совместимый
+        с GUI-колбеком): success = ВСЕ URL отвечают.
+        """
+        result = {
+            'params': params, 'success': False, 'speed': float('inf'),
+            'urls_ok': 0, 'urls_total': len(test_urls), 'error': ''
+        }
+
+        if not self.mgr.is_installed():
+            result['error'] = 'nfqws не установлен (~/zapret/nfq/nfqws)'
+            return result
+
+        was_running = self.mgr.is_service_active()
+        prev_params = self.mgr.load_config().get('params')
+
+        ok, err = self.mgr.start(params)
+        if not ok:
+            result['error'] = f'сервис не стартовал: {err}'
+            return result
+        time.sleep(settle)
+
+        try:
+            ok_n, total, speed, details = self.test_connection(test_urls, timeout)
+            result.update({
+                'success': ok_n == total and total > 0,
+                'speed': speed, 'urls_ok': ok_n, 'urls_total': total,
+                'details': details
+            })
+            if not result['success']:
+                if ok_n > 0:
+                    result['error'] = (f'Частичный успех: {ok_n}/{total} '
+                                      f'(успех = ВСЕ URL)')
+                else:
+                    result['error'] = 'Все тестовые URL недоступны'
+        finally:
+            # сервис останавливаем; если он работал до нас с другими
+            # параметрами — восстанавливаем прежние параметры
+            self.mgr.stop()
+            if was_running and prev_params and prev_params != params:
+                ok2, _ = self.mgr.start(prev_params)
+                if ok2:
+                    self.logger.info(
+                        f"восстановлен прежний сервис: {prev_params}")
+        return result
+
+    def stop_search(self):
+        self.stop_requested = True
+        # текущий тест короткий — просто дожидаемся его конца
+        try:
+            self.mgr.stop()
+        except Exception:
+            pass
+
+    # ---------------- Главный цикл ----------------
+
+    def find_optimal_params(self, max_tests=20, test_urls=None,
+                            progress_callback=None, min_tests=None):
+        """Перебор комбинаций nfqws. Сигнатура совместима с
+        StrategySearcher.find_optimal_params (port игнорируется —
+        nfqws работает не через порт). Возвращает (best, best_result).
+        """
+        if self.is_searching:
+            return None, None
+
+        unlimited = not max_tests
+        min_floor = 1
+        if unlimited and min_tests:
+            min_floor = max(1, int(min_tests))
+
+        self.is_searching = True
+        self.stop_requested = False
+
+        if test_urls is None:
+            test_urls = list(self.default_test_urls)
+
+        base_combos = self.generate_combinations()
+        best_params, best_result = None, None
+        tested_count = 0
+
+        if progress_callback:
+            progress_callback('start', {'total': 0 if unlimited else len(base_combos),
+                                        'port': None, 'unlimited': unlimited,
+                                        'engine': 'nfqws'})
+
+        def _combo_source():
+            # сначала известные кандидаты (по матрице), затем — с
+            # доп. вариациями (в unlimited-режиме): autottl, ttl,
+            # repeats — пока генератор не исчерпан.
+            # ⭐ в ЛИМИТИРОВАННОМ режиме режем поток до max_tests
+            # (раньше лимит игнорировался: --max-tests 2 всё равно
+            # перебирал всю матрицу)
+            yielded = 0
+            for p in base_combos:
+                if not unlimited and yielded >= max_tests:
+                    return
+                yielded += 1
+                yield p
+            if unlimited:
+                extras = []
+                for base in base_combos:
+                    extras.append(base + ' --dpi-desync-autottl=1')
+                    extras.append(base + ' --dpi-desync-repeats=6')
+                for e in extras:
+                    yield e
+
+        for params in _combo_source():
+            if self.stop_requested:
+                self.logger.info("Поиск прерван пользователем")
+                break
+            res = self.test_params(params, test_urls)
+            tested_count += 1
+            self.add_to_history(res)
+            self.logger.info(
+                f"[{tested_count}] {'OK' if res['success'] else 'FAIL'} "
+                f"{res['speed']:.2f}s {params} {res.get('error', '')}")
+            if progress_callback:
+                progress_callback('test', {'index': tested_count - 1,
+                                           'params': params, 'result': res})
+            if res['success'] and (best_result is None
+                                   or res['speed'] < best_result['speed']):
+                best_params, best_result = params, res
+            if unlimited and res['success'] and tested_count >= min_floor:
+                self.logger.info(
+                    f"Найдена рабочая стратегия (попытка {tested_count}): {params}")
+                break
+
+        self.is_searching = False
+        if progress_callback:
+            progress_callback('done', {'best': best_params, 'result': best_result})
+        if best_params:
+            self.logger.info(f"Лучший результат: {best_params} "
+                             f"({best_result['speed']:.2f}s)")
+        else:
+            self.logger.warning("Рабочие параметры nfqws не найдены")
+        return best_params, best_result
+
+
 # ---------------- CLI ----------------
 
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description='Поиск оптимальных параметров ciadpi')
+    parser.add_argument('--engine', choices=['byedpi', 'nfqws'], default='byedpi',
+                        help='Движок: byedpi (тестовый SOCKS-порт) или nfqws '
+                             '(через реальный systemd-сервис, все приложения)')
     parser.add_argument('--max-tests', type=int, default=20)
     parser.add_argument('--until-found', action='store_true',
                         help='Искать до нахождения: без лимита попыток, '
@@ -531,7 +881,10 @@ if __name__ == '__main__':
     parser.add_argument('--url', action='append', help='Доп. URL для проверки (можно несколько)')
     args = parser.parse_args()
 
-    s = StrategySearcher(test_port=args.port)
+    if args.engine == 'nfqws':
+        s = NfqwsStrategySearcher()
+    else:
+        s = StrategySearcher(test_port=args.port)
     urls = list(s.default_test_urls)
     if args.url:
         urls = args.url + urls
@@ -540,11 +893,13 @@ if __name__ == '__main__':
 
     def cb(stage, data):
         if stage == 'start':
+            port_txt = (f" (тестовый порт {data['port']})"
+                        if data.get('port') else " (через реальный сервис)")
             if data.get('unlimited'):
-                print(f"▶️ Режим «до нахождения»: лимита нет, стоп по успеху "
-                      f"или Ctrl+C (тестовый порт {data['port']})")
+                print(f"▶️ [{args.engine}] Режим «до нахождения»: лимита нет, "
+                      f"стоп по успеху или Ctrl+C{port_txt}")
             else:
-                print(f"▶️ Всего комбинаций: {data['total']} (тестовый порт {data['port']})")
+                print(f"▶️ [{args.engine}] Всего комбинаций: {data['total']}{port_txt}")
         elif stage == 'test':
             r = data['result']
             status = f"✅ {r['urls_ok']}/{r['urls_total']} за {r['speed']:.2f}s" if r['success'] \

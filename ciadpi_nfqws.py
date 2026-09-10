@@ -275,23 +275,36 @@ WantedBy=multi-user.target
         )
         tmp = Path('/tmp/ciadpi_nfqws_temp.service')
         tmp.write_text(content, encoding='utf-8')
-        for cmd in ([*'sudo', '-n', self._resolve_bin('TEE_BIN'),
-                     str(self.UNIT_FILE)],
-                    ['pkexec', 'cp', str(tmp), str(self.UNIT_FILE)]):
-            try:
-                if 'tee' in cmd:
-                    with open(tmp, 'rb') as f_in:
-                        r = subprocess.run(cmd, stdin=f_in,
-                                           capture_output=True, timeout=90)
-                else:
-                    r = subprocess.run(cmd, capture_output=True, timeout=90)
-                if r.returncode == 0:
-                    self._systemctl('daemon-reload')
-                    return True, ''
-            except (FileNotFoundError, subprocess.TimeoutExpired):
-                continue
-        return False, ('Не удалось записать юнит-файл (нужны права root). '
-                       'Запустите настройку привилегий.')
+        # ⭐ sudo tee идёт ПЕРВЫМ (passwordless по sudoers) и ОБЯЗАТЕЛЬНО
+        # с stdin из tmp-файла: без stdin tee наследует EOF и «успешно»
+        # пишет ПУСТОЙ юнит (0 байт = masked для systemd!). Проверка
+        # `'tee' in cmd` раньше всегда была False (элемент '/usr/bin/tee',
+        # не 'tee') — stdin-ветка никогда не включалась.
+        # pkexec cp — только крайний fallback: без настроенных прав он
+        # рисует polkit-диалог пароля.
+        sudo_tee = ['sudo', '-n', self._resolve_bin('TEE_BIN'),
+                    str(self.UNIT_FILE)]
+        try:
+            with open(tmp, 'rb') as f_in:
+                r = subprocess.run(sudo_tee, stdin=f_in,
+                                   capture_output=True, timeout=90)
+            if r.returncode == 0 and self.UNIT_FILE.stat().st_size > 0:
+                self._systemctl('daemon-reload')
+                return True, ''
+            last_err = (r.stderr or b'').decode(errors='replace')[:200]
+        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+            last_err = str(e)
+        try:
+            r = subprocess.run(['pkexec', 'cp', str(tmp), str(self.UNIT_FILE)],
+                               capture_output=True, timeout=90)
+            if r.returncode == 0 and self.UNIT_FILE.stat().st_size > 0:
+                self._systemctl('daemon-reload')
+                return True, ''
+            last_err = (r.stderr or b'').decode(errors='replace')[:200]
+        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+            last_err = str(e)
+        return False, ('Не удалось записать юнит-файл (нужны права root): '
+                       f'{last_err}. Запустите настройку привилегий.')
 
     def is_service_active(self):
         ok, out = self._systemctl('is-active', self.SERVICE)

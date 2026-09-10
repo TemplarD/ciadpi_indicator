@@ -43,16 +43,22 @@ HELP_TEXTS = {
 
     🐟 ДВА ДВИЖКА ОБХОДА (v1.7+):
 
-    Меню «Движок обхода» — ползунок с двумя положениями:
+    Меню «Движок обхода» — галочка «Движок nfqws»:
 
-    • byedpi (слева) — SOCKS5-прокси на 127.0.0.1. Обходится только
-      трафик, явно направленный в прокси (системный/ручной режим).
-      Приложения нужно настраивать на прокси.
+    • галочка СНЯТА — byedpi: SOCKS5-прокси на 127.0.0.1. Обходится
+      только трафик, явно направленный в прокси (системный/ручной
+      режим). Приложения нужно настраивать на прокси.
 
-    • nfqws (справа) — перехват пакетов через NFQUEUE: правила
+    • галочка СТОИТ — nfqws: перехват пакетов через NFQUEUE: правила
       nftables заворачивают первые пакеты ВСЕХ исходящих TCP-соединений
       (порты 80/443) в очередь, nfqws искажает их (desync). НИКАКОЙ
       настройки приложений не нужно — работает для всей машины.
+
+    ⭐ Выбор движка НЕ зависит от того, запущен ли сервис: остановленный
+    nfqws остаётся выбранным nfqws — меню, «Запустить/Остановить»
+    и статус продолжают управлять именно им. «Остановить сервис»
+    больше НЕ переключает движок, а «Запустить» поднимает выбранный.
+    (В подменю движка две строки: «Выбран: …» и «Сервис: active/inactive».)
 
     Движки взаимоисключающие: nfqws перехватил бы и трафик byedpi
     (двойное искажение ломает соединения). Переключатель сам
@@ -63,6 +69,14 @@ HELP_TEXTS = {
     показываются только пункты активного движка. Параметры nfqws —
     в «Движок обхода → Параметры nfqws»
     (формат zapret: --dpi-desync=…, с примерами и проверкой).
+
+    🔍 ПОИСК СТРАТЕГИИ ДЛЯ ЛЮБОГО ДВИЖКА (v1.9+):
+    В диалоге «Поиск стратегии» выберите движок: byedpi тестируется
+    на отдельном порту (интернет не прерывается), nfqws — через
+    реальный сервис (каждая комбинация включается на ~10 секунд;
+    успех = все указанные URL открываются). Для nfqws-режима
+    используется формат zapret, найденные параметры применяются
+    кнопкой «Применить» прямо в nfqws.json + рестарт сервиса.
 
     ⭐ ГЛАВНЫЙ ПРИНЦИП РАБОТЫ:
 
@@ -200,16 +214,24 @@ HELP_TEXTS = {
 
     🐟 TWO BYPASS ENGINES (v1.7+):
 
-    Menu "Bypass engine" — a toggle with two positions:
+    Menu "Bypass engine" — a checkbox "nfqws engine":
 
-    • byedpi (left) — SOCKS5 proxy on 127.0.0.1. Only traffic sent
-      into the proxy is bypassed (system/manual mode). Applications
-      must be configured to use the proxy.
+    • checkbox UNCHECKED — byedpi: SOCKS5 proxy on 127.0.0.1. Only
+      traffic sent into the proxy is bypassed (system/manual mode).
+      Applications must be configured to use the proxy.
 
-    • nfqws (right) — packet interception via NFQUEUE: nftables
-      rules direct the first packets of ALL outgoing TCP connections
-      (ports 80/443) into a queue, nfqws distorts them (desync).
-      NO application configuration is needed — works machine-wide.
+    • checkbox CHECKED — nfqws: packet interception via NFQUEUE:
+      nftables rules direct the first packets of ALL outgoing TCP
+      connections (ports 80/443) into a queue, nfqws distorts them
+      (desync). NO application configuration is needed — works
+      machine-wide.
+
+    ⭐ The engine choice does NOT depend on whether the service is
+    running: a stopped nfqws remains the selected engine — the menu,
+    Start/Stop and the status keep controlling IT. "Stop service" no
+    longer switches the engine, and "Start" brings up the selected
+    one. (The engine submenu shows two lines: "Selected: ..." and
+    "Service: active/inactive".)
 
     The engines are mutually exclusive: nfqws would also intercept
     byedpi's traffic (double distortion breaks connections). The
@@ -220,6 +242,14 @@ HELP_TEXTS = {
     the menu — only the active engine's items are shown.
     nfqws parameters live in "Bypass engine → nfqws parameters"
     (zapret format: --dpi-desync=..., with examples and validation).
+
+    🔍 STRATEGY SEARCH FOR EITHER ENGINE (v1.9+):
+    In the "Strategy search" dialog pick the engine: byedpi is tested
+    on a separate port (internet is not interrupted), nfqws — through
+    the real service (each combo runs for ~10 seconds; success = all
+    listed URLs open). nfqws mode uses the zapret format; found
+    parameters are applied by the "Apply" button straight into
+    nfqws.json + a service restart.
 
     ⭐ THE KEY OPERATING PRINCIPLE:
 

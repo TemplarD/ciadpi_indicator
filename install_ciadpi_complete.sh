@@ -36,13 +36,68 @@ if [ "$EUID" -eq 0 ]; then
     error "Please do not run as root. The script will use sudo when needed."
 fi
 
+# ⭐ Кросс-дистро диспетчер пакетов (v1.9): поддерживаем apt/pacman/dnf/zypper.
+# pkg_all: имена пакетов различаются — маппим по диспетчеру.
+detect_package_manager() {
+    if command -v apt >/dev/null 2>&1; then
+        PKG_MGR="apt"
+    elif command -v pacman >/dev/null 2>&1; then
+        PKG_MGR="pacman"
+    elif command -v dnf >/dev/null 2>&1; then
+        PKG_MGR="dnf"
+    elif command -v zypper >/dev/null 2>&1; then
+        PKG_MGR="zypper"
+    else
+        PKG_MGR="unknown"
+    fi
+    log "Package manager: $PKG_MGR"
+}
+
+# pkgs_install <ubuntu-style-names...> — ставит пакеты по маппингу диспетчера
+# (имена даются в ubuntu-стиле; для pacman/dnf есть таблица соответствий,
+# неизвестные пакеты пропускаются с предупреждением)
+pkgs_install() {
+    local requested=("$@")
+    local final=()
+    for pkg in "${requested[@]}"; do
+        case "$PKG_MGR:$pkg" in
+            # pacman: git build-essential→base-devel gcc→gcc
+            pacman:build-essential) final+=("base-devel") ;;
+            pacman:gir1.2-appindicator3-0.1) final+=("libappindicator-gtk3") ;;
+            pacman:gir1.2-ayatanaappindicator3-0.1) final+=("libayatana-appindicator") ;;
+            pacman:policykit-1) final+=("polkit") ;;
+            # dnf
+            dnf:build-essential) final+=("gcc" "gcc-c++" "make") ;;
+            dnf:gir1.2-appindicator3-0.1) final+=("libappindicator-gtk3") ;;
+            dnf:gir1.2-ayatanaappindicator3-0.1) final+=("libayatana-appindicator-gtk3") ;;
+            dnf:policykit-1) final+=("polkit") ;;
+            # zypper
+            zypper:build-essential) final+=("-t pattern devel_basis") ;;
+            zypper:policykit-1) final+=("polkit") ;;
+            # apt — имена уже верные
+            apt:*) final+=("$pkg") ;;
+            *)
+                warn "Пакет $pkg не мапится на $PKG_MGR — пропущен"
+                ;;
+        esac
+    done
+    [ ${#final[@]} -eq 0 ] && { warn "Нет пакетов для установки"; return 0; }
+    case "$PKG_MGR" in
+        apt)   sudo apt install -y "${final[@]}" ;;
+        pacman) sudo pacman -S --noconfirm --needed "${final[@]}" ;;
+        dnf)   sudo dnf install -y "${final[@]}" ;;
+        zypper) sudo zypper --non-interactive install "${final[@]}" ;;
+        *)     warn "Неизвестный пакетный менеджер — зависимые пакеты не установлены"; return 1 ;;
+    esac
+}
+
+detect_package_manager
+
 # Install build dependencies
 install_build_dependencies() {
     log "Installing build dependencies..."
     
-    sudo apt update || warn "Failed to update package list"
-    
-    sudo apt install -y git build-essential gcc || error "Failed to install build tools"
+    pkgs_install git build-essential gcc || warn "Не удалось поставить build-инструменты (продолжаем — возможно уже есть)"
     
     log "Build dependencies installed"
 }
@@ -107,6 +162,46 @@ install_byedpi() {
     log "byedpi successfully installed in $byedpi_dir"
 }
 
+# ⭐ v1.9: опциональная установка nfqws-движка (zapret). Движок не
+# обязателен — трей работает и с одним byedpi; nfqws добавляет
+# перехват NFQUEUE для всех приложений сразу.
+install_nfqws() {
+    local zapret_dir="$HOME/zapret"
+    
+    if [ -d "$zapret_dir/nfq" ] && [ -x "$zapret_dir/nfq/nfqws" ]; then
+        log "nfqws уже собран: $zapret_dir/nfq/nfqws"
+        return 0
+    fi
+    
+    echo
+    read -p "Установить второй движок nfqws (zapret, NFQUEUE для всех приложений)? (y/N): " -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        log "nfqws пропущен (трей будет работать с byedpi)"
+        return 0
+    fi
+    
+    if [ -d "$zapret_dir" ]; then
+        log "zapret уже существует, обновляем..."
+        cd "$zapret_dir" && git pull || warn "Не удалось обновить zapret"
+    else
+        log "Клонируем zapret..."
+        git clone --depth 1 https://github.com/bol-van/zapret.git "$zapret_dir" \
+            || error "Не удалось клонировать zapret"
+    fi
+    
+    cd "$zapret_dir/nfq" || error "Каталог zapret/nfq не найден"
+    log "Собираем nfqws..."
+    make || error "Не удалось собрать nfqws"
+    
+    if [ ! -f nfqws ]; then
+        error "Бинарник nfqws не создан"
+    fi
+    mkdir -p "$zapret_dir/binaries/my"
+    cp -f nfqws "$zapret_dir/binaries/my/nfqws"
+    log "nfqws собран: $zapret_dir/nfq/nfqws (копия в binaries/my/)"
+}
+
 # Check dependencies for indicator
 check_dependencies() {
     log "Checking dependencies for indicator..."
@@ -157,9 +252,7 @@ except (ValueError, ImportError):
 # Install dependencies
 install_dependencies() {
     log "Installing dependencies..."
-    sudo apt update || warn "Failed to update package list"
-    
-    sudo apt install -y "$@" || error "Failed to install dependencies: $*"
+    pkgs_install "$@" || error "Failed to install dependencies: $*"
 }
 
 # Функция для получения текущих параметров
@@ -281,6 +374,7 @@ install_python_scripts() {
         [ -f "ciadpi_i18n.py" ] && cp "ciadpi_i18n.py" "$HOME/.local/bin/"          # Локализация RU/EN
         [ -f "ciadpi_params_spec.py" ] && cp "ciadpi_params_spec.py" "$HOME/.local/bin/"  # Конструктор параметров
         [ -f "ciadpi_texts.py" ] && cp "ciadpi_texts.py" "$HOME/.local/bin/"        # Тексты справки/о программе
+        [ -f "ciadpi_nfqws.py" ] && cp "ciadpi_nfqws.py" "$HOME/.local/bin/"          # nfqws-движок (zapret)
         
     else
         # УДАЛЕННАЯ установка - скачиваем с GitHub
@@ -301,6 +395,7 @@ install_python_scripts() {
         wget -q -O "$HOME/.local/bin/ciadpi_i18n.py" "$BASE_URL/ciadpi_i18n.py" 2>/dev/null || warn "i18n module not available"
         wget -q -O "$HOME/.local/bin/ciadpi_params_spec.py" "$BASE_URL/ciadpi_params_spec.py" 2>/dev/null || warn "Params spec module not available"
         wget -q -O "$HOME/.local/bin/ciadpi_texts.py" "$BASE_URL/ciadpi_texts.py" 2>/dev/null || warn "Help/About texts module not available"
+        wget -q -O "$HOME/.local/bin/ciadpi_nfqws.py" "$BASE_URL/ciadpi_nfqws.py" 2>/dev/null || warn "nfqws engine module not available"
     fi
     
     log "Python scripts installed to ~/.local/bin/"
@@ -532,6 +627,7 @@ main() {
     
     install_build_dependencies
     install_byedpi
+    install_nfqws
     check_dependencies
     install_service
     install_python_scripts

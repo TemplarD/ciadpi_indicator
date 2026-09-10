@@ -1162,42 +1162,38 @@ class AdvancedTrayIndicator:
         if not engine_is_nfqws:
             menu.append(settings_item)
 
-        # ⭐ Движок обхода: ползунок byedpi ↔ nfqws прямо в меню.
-        # Переключатель показывает текущее состояние (не нужно раскрывать
-        # подменю), один клик = переключение движка.
+        # ⭐ Движок обхода: чекбокс «nfqws» прямо в меню.
+        # Gtk.CheckMenuItem выбран НЕ случайно: в AppIndicator/DBusMenu
+        # ползунок Gtk.Switch внутри пункта не получает кликов (DBusMenu
+        # не пробрасывает события embedded-виджетам), а CheckMenuItem
+        # мапится в standard toggle item и кликается нативно.
+        # ⭐ Синк состояния из update_status идёт через _engine_check_sync()
+        # с guard-флагом: программный set_active тоже стреляет toggled,
+        # без guard тикер «нажимал» чекбокс за пользователя (ложное
+        # переключение движка при смене статуса сервиса).
         if NFQWS_AVAILABLE and self.nfqws:
             active_engine = self._active_engine()
             engine_item = Gtk.MenuItem(label=t('engine.menu'))
-            engine_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-            engine_box.set_margin_top(4); engine_box.set_margin_bottom(4)
-            engine_box.set_margin_start(12); engine_box.set_margin_end(12)
 
-            lbl_byedpi = Gtk.Label(label=t('engine.byedpi_short'))
-            lbl_nfqws = Gtk.Label(label=t('engine.nfqws_short'))
-            engine_switch = Gtk.Switch()
-            engine_switch.set_active(active_engine == 'nfqws')
-            engine_switch.set_tooltip_text(t('engine.switch_hint'))
+            engine_check = Gtk.CheckMenuItem(label=t('engine.nfqws_on'))
+            engine_check.set_active(active_engine == 'nfqws')
+            engine_check.set_tooltip_text(t('engine.switch_hint'))
 
-            engine_box.pack_start(lbl_byedpi, False, False, 0)
-            engine_box.pack_start(engine_switch, False, False, 0)
-            engine_box.pack_start(lbl_nfqws, False, False, 0)
-            sw_item = Gtk.MenuItem()
-            sw_item.add(engine_box)
-            # клик по всей строке тоже переключает
-            sw_item.connect("activate",
-                            lambda w: engine_switch.set_active(
-                                not engine_switch.get_active()))
-
-            def on_engine_switch(widget, state):
-                want = 'nfqws' if state else 'byedpi'
+            def on_engine_toggled(widget):
+                # обрабатываем ТОЛЬКО клики пользователя: программный
+                # синк ставит _engine_syncing и в этот момент не меняет движок
+                if getattr(self, '_engine_syncing', False):
+                    return
+                want = 'nfqws' if widget.get_active() else 'byedpi'
                 if want != self._active_engine():
-                    # откатываем визуально — реальное состояние вернёт
-                    # switch_engine после перезапуска сервисов + rebuild_menu
                     GLib.idle_add(self.switch_engine, None, want)
-            engine_switch.connect("state-set", on_engine_switch)
+                else:
+                    # визуально уже верно, но сервис-статус вернёт rebuild
+                    pass
+            engine_check.connect("toggled", on_engine_toggled)
 
             engine_menu = Gtk.Menu()
-            engine_menu.append(sw_item)
+            engine_menu.append(engine_check)
             engine_menu.append(Gtk.SeparatorMenuItem())
 
             engine_hint = Gtk.MenuItem(
@@ -1206,7 +1202,21 @@ class AdvancedTrayIndicator:
                         else ('byedpi 🟢' if active_engine == 'byedpi'
                               else '🔴'))))
             engine_hint.set_sensitive(False)
+            # ⭐ подсказка статуса СЕРВИСА выбранного движка (живость —
+            # отдельно от выбора: движок может быть выбран, но остановлен)
+            try:
+                probe = ('ciadpi-nfqws.service' if active_engine == 'nfqws'
+                         else 'ciadpi.service')
+                r = subprocess.run(['systemctl', 'is-active', probe],
+                                   capture_output=True, text=True, timeout=2)
+                svc_st = (r.stdout or '').strip() or 'unknown'
+            except Exception:
+                svc_st = 'unknown'
+            svc_item = Gtk.MenuItem(
+                label=t('engine.hint_service').format(st=svc_st))
+            svc_item.set_sensitive(False)
             engine_menu.append(engine_hint)
+            engine_menu.append(svc_item)
 
             nfqws_params_item = Gtk.MenuItem(label=t('engine.nfqws_params_menu'))
             nfqws_params_item.connect("activate", self.show_nfqws_settings)
@@ -1217,9 +1227,9 @@ class AdvancedTrayIndicator:
 
             engine_item.set_submenu(engine_menu)
             menu.append(engine_item)
-            # ⭐ ползунок живёт в меню: меню должно показать его состояние.
-            # self._engine_switch хранит ссылку для синка в update_status
-            self._engine_switch = engine_switch
+            # ⭐ чекбокс живёт в меню: меню должно показать его состояние.
+            # Ссылка для программного синка в update_status (там же guard).
+            self._engine_check = engine_check
 
         # ⭐ ПРИ NFQWS: пункты чужого движка (byedpi) вообще не попадают
         # в меню — сереть/прятать нечего, при смене движка меню
@@ -1342,13 +1352,20 @@ class AdvancedTrayIndicator:
             if hasattr(self, 'status_item') and self.status_item:
                 self.status_item.set_label(status_label)
 
-            # ⭐ синк ползунка движка (меню создаётся заново редко)
-            sw = getattr(self, '_engine_switch', None)
-            if sw is not None:
+            # ⭐ синк чекбокса движка (меню пересобирается редко). GUARD:
+            # программный set_active тоже стреляет toggled — без флага
+            # тикер «кликал» за пользователя и менял движок при каждом
+            # изменении статуса сервиса (запуск/остановка = смена режима!).
+            chk = getattr(self, '_engine_check', None)
+            if chk is not None:
+                want = engine == 'nfqws'
                 try:
-                    sw.set_active(engine == 'nfqws')
+                    if chk.get_active() != want:
+                        self._engine_syncing = True
+                        chk.set_active(want)
+                        self._engine_syncing = False
                 except Exception:
-                    pass
+                    self._engine_syncing = False
 
             if hasattr(self, 'indicator') and self.indicator:
                 if status == 'active':
@@ -2469,26 +2486,19 @@ class AdvancedTrayIndicator:
     # ---------------- Переключатель движка: byedpi ↔ nfqws ----------------
 
     def _active_engine(self):
-        """Какой движок сейчас активен: 'byedpi' | 'nfqws' | None.
+        """Какой движок ВЫБРАН: 'byedpi' | 'nfqws' — липкий выбор из конфига.
 
-        nfqws считается активным, если его сервис running; byedpi —
-        если активен ciadpi.service. Одновременно оба активными быть
-        не должны (переключатель это гарантирует), но при внешнем
-        конфликте приоритет у nfqws (его правила глобальнее).
+        ⭐ Выбор движка НЕ зависит от живости сервиса: остановленный nfqws
+        остаётся выбранным nfqws — меню, Start/Stop/Restart и статус
+        продолжают управлять ИМ. Раньше движок выводился из is-active
+        сервисов (оба inactive → None) — из-за этого «Остановить» менял
+        режим на byedpi, а «Запустить» поднимал не тот движок.
+        Живость сервиса — отдельный вопрос статуса, не выбора.
         """
-        try:
-            if self.nfqws and self.nfqws.is_service_active():
-                return 'nfqws'
-        except Exception:
-            pass
-        try:
-            r = subprocess.run(['systemctl', 'is-active', 'ciadpi.service'],
-                               capture_output=True, text=True, timeout=3)
-            if (r.stdout or '').strip() == 'active':
-                return 'byedpi'
-        except Exception:
-            pass
-        return None
+        engine = (self.current_params or {}).get('engine', 'byedpi')
+        if engine == 'nfqws' and not (NFQWS_AVAILABLE and self.nfqws):
+            return 'byedpi'  # модуль nfqws недоступен — безопасный fallback
+        return engine
 
     def switch_engine(self, widget, engine):
         """Переключение движка обхода (вызов из меню, фоновый поток).
@@ -3093,6 +3103,21 @@ class AdvancedTrayIndicator:
         main_box.set_margin_start(10)
         main_box.set_margin_end(10)
 
+        # --- Движок поиска: byedpi (тестовый порт) ↔ nfqws (реальный сервис) ---
+        row_engine = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        lbl_engine = Gtk.Label(label=t('search.engine_label'))
+        lbl_engine.set_xalign(0)
+        combo_engine = Gtk.ComboBoxText()
+        combo_engine.append_text(t('search.engine_byedpi'))
+        combo_engine.append_text(t('search.engine_nfqws'))
+        # активный движок трея — по умолчанию в диалоге
+        engine_is_nfqws_now = (NFQWS_AVAILABLE and self.nfqws
+                               and self._active_engine() == 'nfqws')
+        combo_engine.set_active(1 if engine_is_nfqws_now else 0)
+        combo_engine.set_tooltip_text(t('search.engine_hint'))
+        row_engine.pack_start(lbl_engine, False, False, 0)
+        row_engine.pack_start(combo_engine, False, False, 0)
+
         # --- Настройки проверки ---
         settings_frame = Gtk.Frame(label=t('search.settings'))
         settings_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
@@ -3153,6 +3178,7 @@ class AdvancedTrayIndicator:
         settings_box.pack_start(row1, False, False, 0)
         settings_box.pack_start(row_mode, False, False, 0)
         settings_box.pack_start(row2, False, False, 0)
+        settings_box.pack_start(row_engine, False, False, 0)
         settings_frame.add(settings_box)
 
         # --- Прогресс ---
@@ -3292,7 +3318,23 @@ class AdvancedTrayIndicator:
             if not urls:
                 ui_log(t('search.need_urls'))
                 return
-            searcher.test_port = int(spin_port.get_value())
+            # ⭐ поисковик — по выбранному движку; nfqws-поиск работает
+            # через реальный сервис, порт ему не нужен (прячем строку)
+            engine_idx = combo_engine.get_active()
+            use_nfqws = engine_idx == 1
+            if use_nfqws:
+                if not (NFQWS_AVAILABLE and self.nfqws):
+                    ui_log(t('engine.nfqws_unavailable'))
+                    return
+                from ciadpi_strategy_search import NfqwsStrategySearcher
+                active_searcher = NfqwsStrategySearcher()
+                row1.set_sensitive(False)   # порт не участвует
+            else:
+                active_searcher = StrategySearcher()
+                row1.set_sensitive(True)
+                active_searcher.test_port = int(spin_port.get_value())
+            state['searcher'] = active_searcher
+            state['engine'] = 'nfqws' if use_nfqws else 'byedpi'
             unlimited = chk_until_found.get_active()
             max_tests = 0 if unlimited else int(spin_tests.get_value())
             min_tests = int(spin_min_tests.get_value()) if unlimited else None
@@ -3304,14 +3346,15 @@ class AdvancedTrayIndicator:
             log_buffer.set_text("")
             ui_set_progress(0.0, t('search.unlimited_mode') if unlimited else "Запуск...")
             threading.Thread(
-                target=searcher.find_optimal_params,
+                target=active_searcher.find_optimal_params,
                 args=(max_tests, urls, on_progress),
                 kwargs={'min_tests': min_tests},
                 daemon=True
             ).start()
 
         def on_stop(btn):
-            searcher.stop_search()
+            s = state.get('searcher') or searcher
+            s.stop_search()
             ui_log(t('search.stop_req'))
 
         def on_apply(btn):
@@ -3322,14 +3365,31 @@ class AdvancedTrayIndicator:
             self.show_notification(t('search.apply_run'), t('search.apply_run_2'))
 
             def apply_thread():
-                success = self.update_service_params(params)
+                if state.get('engine') == 'nfqws':
+                    # ⭐ nfqws: параметры идут в nfqws.json + рестарт
+                    # сервиса (формат zapret, НЕ byedpi-юнит)
+                    if not self.nfqws:
+                        ui_log(t('engine.nfqws_unavailable'))
+                        return
+                    cfg = self.nfqws.load_config()
+                    cfg['params'] = params
+                    self.nfqws.save_config(cfg)
+                    ok, err = self.nfqws.start(params)
+                    success = ok
+                    err_msg = err
+                else:
+                    success = self.update_service_params(params)
+                    err_msg = ''
                 def finish():
                     dialog.set_sensitive(True)
                     if success:
                         ui_log(f"✅ {t('search.applied')}: {params}")
                         self.show_notification(t('notif.success'), t('notif.best_applied'), category='params')
                     else:
-                        ui_log(f"❌ {t('search.apply_fail')}: {params}")
+                        msg = f"❌ {t('search.apply_fail')}"
+                        if err_msg:
+                            msg += f": {err_msg}"
+                        ui_log(msg)
                     return False
                 GLib.idle_add(finish)
 
@@ -3344,7 +3404,8 @@ class AdvancedTrayIndicator:
             # останавливал поиск, диалог оставался висеть (модально!).
             try:
                 if state['running']:
-                    searcher.stop_search()
+                    s = state.get('searcher') or searcher
+                    s.stop_search()
             finally:
                 d.destroy()
                 self.strategy_window = None

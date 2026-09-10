@@ -94,6 +94,21 @@ stop_services() {
     # Останавливаем индикатор если запущен
     pkill -f "ciadpi_advanced_tray.py" 2>/dev/null && log "Индикатор остановлен" || warn "Индикатор не запущен"
     
+    # ⭐ nfqws-движок: стоп юнита (снимает nft-правила), disable,
+    # снос таблицы inet ciadpi и юнит-файла — иначе «удалённый»
+    # индикатор оставляет работающий обход в системе
+    if systemctl list-unit-files 2>/dev/null | grep -q '^ciadpi-nfqws\.service'; then
+        if systemctl is-active --quiet ciadpi-nfqws.service 2>/dev/null; then
+            sudo systemctl stop ciadpi-nfqws.service || warn "Не удалось остановить ciadpi-nfqws"
+            log "Сервис ciadpi-nfqws остановлен"
+        fi
+        sudo systemctl disable ciadpi-nfqws.service 2>/dev/null || true
+        sudo systemctl reset-failed ciadpi-nfqws.service 2>/dev/null || true
+    fi
+    sudo nft delete table inet ciadpi 2>/dev/null || true
+    sudo rm -f /etc/systemd/system/ciadpi-nfqws.service
+    log "nfqws-движок вычищен (юнит, nft-таблица inet ciadpi)"
+    
     # Останавливаем systemd сервис
     if systemctl is-active --quiet ciadpi.service 2>/dev/null; then
         sudo systemctl stop ciadpi.service || warn "Не удалось остановить сервис"
@@ -137,6 +152,7 @@ remove_user_files() {
         "ciadpi_params_spec.py"
         "ciadpi_texts.py"
         "ciadpi_privileges.sh"
+        "ciadpi_nfqws.py"
         "diagnose_ciadpi.py"
     )
     
