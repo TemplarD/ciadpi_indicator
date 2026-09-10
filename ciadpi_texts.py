@@ -43,7 +43,8 @@ HELP_TEXTS = {
 
     🐟 ДВА ДВИЖКА ОБХОДА (v1.7+):
 
-    Меню «Движок обхода» — галочка «Движок nfqws»:
+    Меню «Движок обхода» — галочка «Движок nfqws» ПРЯМО в главном
+    меню (один клик, без подменю):
 
     • галочка СНЯТА — byedpi: SOCKS5-прокси на 127.0.0.1. Обходится
       только трафик, явно направленный в прокси (системный/ручной
@@ -59,6 +60,13 @@ HELP_TEXTS = {
     и статус продолжают управлять именно им. «Остановить сервис»
     больше НЕ переключает движок, а «Запустить» поднимает выбранный.
     (В подменю движка две строки: «Выбран: …» и «Сервис: active/inactive».)
+
+    ⭐ Смена движка НЕ запускает его автоматически (v1.9.1): галочка
+    меняет только ВЫБОР (и boot-флаги — на перезагрузке поднимется
+    именно он). Поднять движок — «Запустить сервис» вручную.
+    При уходе на nfqws системный прокси сбрасывается автоматически
+    (nfqws прокси не использует, а manual на мёртвом порте ломает
+    браузеры).
 
     Движки взаимоисключающие: nfqws перехватил бы и трафик byedpi
     (двойное искажение ломает соединения). Переключатель сам
@@ -348,6 +356,39 @@ HELP_TEXTS = {
     • The whitelist excludes domains from proxying
     • Update byedpi from the menu when new versions come out
 ''',
+}
+
+
+def _split_help_sections(text, lang):
+    """Режет HELP_TEXTS-простыню на (header, body) секции.
+
+    Секция начинается строкой с эмодзи-заголовком в верхнем регистре
+    («    🎯 ОСНОВНЫЕ ВОЗМОЖНОСТИ:»). До первой такой строки — интро
+    (header=None, показывается раскрытым).
+    """
+    import re
+    # строка начинается с не-буквенного символа (эмодзи) и заканчивается
+    # двоеточием — это заголовок секции (Python re не знает \p{So})
+    header_re = re.compile(r'^\s*([^\w\s])[^\n]*:\s*$')
+    intro, sections, cur_h, cur_b = [], [], None, []
+    for line in text.splitlines():
+        if header_re.match(line) and not line.strip().startswith('•'):
+            if cur_h is not None:
+                sections.append((cur_h, '\n'.join(cur_b).strip()))
+            cur_h = line.strip()
+            cur_b = []
+        else:
+            (intro if cur_h is None else cur_b).append(line)
+    if cur_h is not None:
+        sections.append((cur_h, '\n'.join(cur_b).strip()))
+    return [(None, '\n'.join(intro).strip())] + sections
+
+
+# ⭐ v1.9.1: секционная справка — общая часть + Gtk.Expander по темам.
+# Строится из HELP_TEXTS автоматически (заголовки с эмодзи = секции).
+HELP_SECTIONS = {
+    lang: _split_help_sections(HELP_TEXTS[lang], lang)
+    for lang in HELP_TEXTS
 }
 
 

@@ -161,6 +161,8 @@ _STRINGS = {
     'engine.hint_state':  {'ru': 'Выбран: {st}', 'en': 'Selected: {st}'},
     'engine.hint_service': {'ru': 'Сервис: {st}', 'en': 'Service: {st}'},
     'engine.now':         {'ru': 'Движок переключён: {name}', 'en': 'Engine switched: {name}'},
+    'engine.selected':    {'ru': 'Выбран движок: {name}. Сервис не запускаем — поднимите его через «Запустить сервис» (или он поднимется после перезагрузки).',
+                           'en': 'Engine selected: {name}. Service NOT started — start it via "Start service" (or it will come up after reboot).'},
     'engine.nfqws_unavailable': {'ru': 'Модуль nfqws недоступен', 'en': 'nfqws module unavailable'},
     'engine.nfqws_not_installed': {'ru': 'nfqws не найден: клонируйте zapret в ~/zapret и соберите (nfq/make)', 'en': 'nfqws not found: clone zapret to ~/zapret and build (nfq/make)'},
     'engine.rules_not_applied': {'ru': 'nft-правила не применились (нет прав? настройте «Права доступа»)', 'en': 'nft rules not applied (no permission? set up "Privileges")'},

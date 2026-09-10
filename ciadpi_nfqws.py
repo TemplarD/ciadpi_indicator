@@ -139,17 +139,69 @@ table inet {table} {{
         # TCP 80,443: только первые пакеты соединения, без собственных
         # пакетов nfqws (fwmark) — иначе цикл
         meta l4proto tcp tcp dport {{ 80, 443 }} ct original packets 1-6 meta mark != {mark} counter queue num {qnum} bypass
+{udp_rules}
     }}
 }}
 """
 
-    def _write_rules_files(self):
-        """Создаёт nft-файл и root-хелпер применения/снятия правил."""
+    # UDP-ветка правил: генерируется из параметров nfqws (v1.9.1).
+    # --filter-udp=53 (DNS) / --filter-udp=443 (QUIC) / --filter-udp=53,443.
+    # nfqws сам разрулит, какие пакеты портить (по своим профилям
+    # десинка), задача nft — доставить первые UDP-пакеты в очередь.
+    _NFT_UDP_TEMPLATE = """\
+        # UDP {ports}: десинк-профили nfqws (DNS-фейк, QUIC-фейк, udplen…)
+        meta l4proto udp udp dport {{ {ports} }} meta mark != {mark} counter queue num {qnum} bypass"""
+
+    @staticmethod
+    def _extract_udp_ports(params):
+        """Порты UDP-фильтров из параметров nfqws ('53,443' → ['53','443'])."""
+        if not params:
+            return []
+        ports = []
+        for tok in params.split():
+            if tok.startswith('--filter-udp='):
+                val = tok.split('=', 1)[1].lstrip('~').strip('*')
+                if val and val != '*':
+                    for p in val.split(','):
+                        p = p.strip()
+                        if p.isdigit():
+                            ports.append(p)
+        # уникальные, стабильный порядок
+        seen, out = set(), []
+        for p in ports:
+            if p not in seen:
+                seen.add(p)
+                out.append(p)
+        return out
+
+    def _write_rules_files(self, params=None):
+        """Создаёт nft-файл и root-хелпер применения/снятия правил.
+
+        ⭐ v1.9.1: UDP-порты берутся из параметров (--filter-udp=…) —
+        раньше ruleset был жёстко TCP-only и UDP-десинки (DNS/QUIC)
+        физически не работали, пакеты не доезжали до nfqws.
+        params: параметры, под которые пишутся правила (при None —
+        из конфига; write_unit обязан передавать НОВЫЕ, иначе UDP-ветка
+        останется от прошлой конфигурации).
+        """
         self.config_dir.mkdir(parents=True, exist_ok=True)
+        if params is None:
+            params = self.load_config().get('params', '')
+        udp_ports = self._extract_udp_ports(params)
+        # udp-ветки нет, если фильтров нет — подставляем пустоту
+        if udp_ports:
+            udp_rules = '\n'.join(
+                self._NFT_UDP_TEMPLATE.format(
+                    ports=', '.join(udp_ports), mark=self.DESYNC_MARK,
+                    qnum=self.QNUM)
+                for _ in [0])  # одна общая ветка на все порты
+        else:
+            udp_rules = ''
         self.nft_file.write_text(
             self._NFT_RULESET.format(table=self.NFT_TABLE,
                                      qnum=self.QNUM,
-                                     mark=self.DESYNC_MARK),
+                                     mark=self.DESYNC_MARK,
+                                     udp_rules=udp_rules),
             encoding='utf-8')
 
         helper = f"""#!/bin/bash
@@ -251,7 +303,7 @@ WantedBy=multi-user.target
             return False, 'nfqws не установлен (~/zapret/nfq/nfqws)'
         cfg = self.load_config()
         params = params or cfg.get('params') or self.default_params
-        self._write_rules_files()
+        self._write_rules_files(params)
 
         # dry-run: параметры должны проходить проверку самого nfqws
         try:

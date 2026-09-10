@@ -33,7 +33,7 @@ except ImportError:
     def save_lang(): pass
 
 try:
-    from ciadpi_texts import HELP_TEXTS, ABOUT_TEXTS
+    from ciadpi_texts import HELP_TEXTS, ABOUT_TEXTS, HELP_SECTIONS
     TEXTS_AVAILABLE = True
 except ImportError:
     TEXTS_AVAILABLE = False
@@ -1162,18 +1162,15 @@ class AdvancedTrayIndicator:
         if not engine_is_nfqws:
             menu.append(settings_item)
 
-        # ⭐ Движок обхода: чекбокс «nfqws» прямо в меню.
-        # Gtk.CheckMenuItem выбран НЕ случайно: в AppIndicator/DBusMenu
-        # ползунок Gtk.Switch внутри пункта не получает кликов (DBusMenu
-        # не пробрасывает события embedded-виджетам), а CheckMenuItem
-        # мапится в standard toggle item и кликается нативно.
-        # ⭐ Синк состояния из update_status идёт через _engine_check_sync()
-        # с guard-флагом: программный set_active тоже стреляет toggled,
-        # без guard тикер «нажимал» чекбокс за пользователя (ложное
-        # переключение движка при смене статуса сервиса).
+        # ⭐ Движок обхода: чекбокс «nfqws (NFQUEUE для всех)» ПРЯМО в меню
+        # верхнего уровня — один клик без подменю (user: «чанжбокс с
+        # подписью, не вложенное меню»). Gtk.CheckMenuItem — единственный
+        # нативно кликаемый переключатель в AppIndicator/DBusMenu
+        # (ползунки и embedded-виджеты кликов не получают).
+        # Синк из update_status под guard-флагом: программный set_active
+        # тоже стреляет toggled — без guard тикер «кликал» за пользователя.
         if NFQWS_AVAILABLE and self.nfqws:
             active_engine = self._active_engine()
-            engine_item = Gtk.MenuItem(label=t('engine.menu'))
 
             engine_check = Gtk.CheckMenuItem(label=t('engine.nfqws_on'))
             engine_check.set_active(active_engine == 'nfqws')
@@ -1192,44 +1189,34 @@ class AdvancedTrayIndicator:
                     pass
             engine_check.connect("toggled", on_engine_toggled)
 
-            engine_menu = Gtk.Menu()
-            engine_menu.append(engine_check)
-            engine_menu.append(Gtk.SeparatorMenuItem())
-
-            engine_hint = Gtk.MenuItem(
-                label=t('engine.hint_state').format(
-                    st=('nfqws 🟢' if active_engine == 'nfqws'
-                        else ('byedpi 🟢' if active_engine == 'byedpi'
-                              else '🔴'))))
-            engine_hint.set_sensitive(False)
-            # ⭐ подсказка статуса СЕРВИСА выбранного движка (живость —
-            # отдельно от выбора: движок может быть выбран, но остановлен)
-            try:
-                probe = ('ciadpi-nfqws.service' if active_engine == 'nfqws'
-                         else 'ciadpi.service')
-                r = subprocess.run(['systemctl', 'is-active', probe],
-                                   capture_output=True, text=True, timeout=2)
-                svc_st = (r.stdout or '').strip() or 'unknown'
-            except Exception:
-                svc_st = 'unknown'
-            svc_item = Gtk.MenuItem(
-                label=t('engine.hint_service').format(st=svc_st))
-            svc_item.set_sensitive(False)
-            engine_menu.append(engine_hint)
-            engine_menu.append(svc_item)
-
-            nfqws_params_item = Gtk.MenuItem(label=t('engine.nfqws_params_menu'))
-            nfqws_params_item.connect("activate", self.show_nfqws_settings)
-            # при byedpi пункт скрыт — параметры чужого движка не показываем;
-            # после переключения на nfqws меню пересоберётся и пункт появится
-            if active_engine == 'nfqws':
-                engine_menu.append(nfqws_params_item)
-
-            engine_item.set_submenu(engine_menu)
-            menu.append(engine_item)
-            # ⭐ чекбокс живёт в меню: меню должно показать его состояние.
-            # Ссылка для программного синка в update_status (там же guard).
+            menu.append(engine_check)
+            # ⭐ чекбокс живёт в главном меню: обновления состояния —
+            # по ссылке из update_status (там же guard).
             self._engine_check = engine_check
+
+            # Статус выбранного движка отдельной строкой (только при
+            # nfqws; при byedpi строки нет — меньше мусора в меню)
+            if active_engine == 'nfqws':
+                try:
+                    r = subprocess.run(
+                        ['systemctl', 'is-active', 'ciadpi-nfqws.service'],
+                        capture_output=True, text=True, timeout=2)
+                    svc_st = (r.stdout or '').strip() or 'unknown'
+                except Exception:
+                    svc_st = 'unknown'
+                svc_item = Gtk.MenuItem(
+                    label=t('engine.hint_service').format(st=svc_st))
+                svc_item.set_sensitive(False)
+                menu.append(svc_item)
+
+                # ⭐ Параметры nfqws — прямо в главном меню (симметрия
+                # с byedpi-«Настройками»; user: пункт был запрятан в
+                # подменю движка, которого больше нет)
+                nfqws_params_item = Gtk.MenuItem(
+                    label=t('engine.nfqws_params_menu'))
+                nfqws_params_item.connect("activate",
+                                          self.show_nfqws_settings)
+                menu.append(nfqws_params_item)
 
         # ⭐ ПРИ NFQWS: пункты чужого движка (byedpi) вообще не попадают
         # в меню — сереть/прятать нечего, при смене движка меню
@@ -1266,12 +1253,12 @@ class AdvancedTrayIndicator:
 
             menu.append(Gtk.SeparatorMenuItem())
 
-        # Поиск стратегии: перебирает ПАРАМЕТРЫ byedpi — при nfqws
-        # скрыт (найденные параметры всё равно применимы только к byedpi)
-        if not engine_is_nfqws:
-            strategy_item = Gtk.MenuItem(label=t('menu.strategy'))
-            strategy_item.connect("activate", self.show_strategy_search)
-            menu.append(strategy_item)
+        # ⭐ Поиск стратегии: работает для ОБОИХ движков — в диалоге есть
+        # селектор (byedpi = тестовый порт, nfqws = через реальный сервис).
+        # Пункт показываем всегда (user: «поиск исчезал в nfqws-режиме»).
+        strategy_item = Gtk.MenuItem(label=t('menu.strategy'))
+        strategy_item.connect("activate", self.show_strategy_search)
+        menu.append(strategy_item)
 
         # Обновление byedpi без переустановки — byedpi-пункт
         if not engine_is_nfqws:
@@ -2501,11 +2488,17 @@ class AdvancedTrayIndicator:
         return engine
 
     def switch_engine(self, widget, engine):
-        """Переключение движка обхода (вызов из меню, фоновый поток).
+        """Смена ВЫБРАННОГО движка (вызов из чекбокса меню, фоновый поток).
 
-        engine='byedpi': стоп nfqws (снятие nft-правил), старт ciadpi.
-        engine='nfqws':  стоп ciadpi, установка юнита+правил, старт nfqws.
-        Системный прокси трогаем только для byedpi-manual (как обычно).
+        ⭐ v1.9.1: переключение = ВЫБОР, НЕ запуск (user: «при выставлении
+        второго способа делается автоматический запуск — не надо»).
+        Сервисы не стартуем: пользователь поднимет выбранный движок сам
+        через «Запустить сервис» (или он поднимется на ребуте — boot-флаги
+        выставляются). Взаимоисключаемость сохраняется: чужой движок
+        останавливаем, у nfqws снимаются nft-правила.
+        При уходе на nfqws системный прокси откатывается ВСЕГДА (если мы
+        его меняли — из бэкапа, иначе просто в 'none'): мёртвый manual-
+        прокси у NFQUEUE-режима не нужен и ломает браузеры.
         """
         if not getattr(self, '_engine_switching', False):
             self._engine_switching = True
@@ -2515,9 +2508,10 @@ class AdvancedTrayIndicator:
         def worker():
             try:
                 other = 'nfqws' if engine == 'byedpi' else 'byedpi'
-                print(f"🔄 Переключение движка: {other} → {engine}")
+                print(f"🔄 Смена выбранного движка: {other} → {engine} "
+                      f"(без автозапуска)")
 
-                # 1) останавливаем другой движок
+                # 1) останавливаем чужой движок (взаимоисключаемость)
                 if engine == 'byedpi' and self.nfqws:
                     ok, err = self.nfqws.stop()
                     if not ok:
@@ -2526,24 +2520,29 @@ class AdvancedTrayIndicator:
                     if not self.nfqws.rules_active():
                         self.nfqws.remove_rules_fallback()
                 elif engine == 'nfqws':
-                    # byedpi останавливаем без откатов прокси:
-                    # если стоял manual-прокси — он умрёт вместе с портом,
-                    # восстановим как обычно при старте byedpi
-                    if self.current_params.get("proxy_enabled", False) \
-                            and self.we_changed_proxy:
-                        try:
-                            self.restore_system_proxy_backup()
-                            self.we_changed_proxy = False
-                            self.current_params["we_changed_proxy"] = False
-                            self.save_config()
-                        except Exception as e:
-                            print(f"⚠️ откат прокси при смене движка: {e}")
                     self._systemctl('stop', 'ciadpi.service')
+                    # ⭐ откат системного прокси — БЕЗУСЛОВНО: nfqws прокси
+                    # не использует, а manual на мёртвом порте ломает браузеры
+                    try:
+                        if self.we_changed_proxy:
+                            self.restore_system_proxy_backup()
+                        else:
+                            # мы прокси не меняли, но manual мог остаться от
+                            # byedpi-режима — сбрасываем в 'none'
+                            subprocess.run(
+                                ['gsettings', 'set',
+                                 'org.gnome.system.proxy', 'mode', 'none'],
+                                capture_output=True, timeout=5)
+                        self.we_changed_proxy = False
+                        self.current_params['we_changed_proxy'] = False
+                        self.current_params['proxy_enabled'] = False
+                        self.save_config()
+                        print("🔌 Системный прокси сброшен (nfqws не использует)")
+                    except Exception as e:
+                        print(f"⚠️ откат прокси при смене движка: {e}")
 
-                # 2) запускаем выбранный
-                if engine == 'byedpi':
-                    ok, err = self._systemctl('start', 'ciadpi.service')
-                else:
+                # 2) валидация nfqws перед ВЫБОРОМ
+                if engine == 'nfqws':
                     if not self.nfqws:
                         self.show_notification(t('notif.error'),
                                                t('engine.nfqws_unavailable'),
@@ -2554,42 +2553,30 @@ class AdvancedTrayIndicator:
                             t('notif.error'), t('engine.nfqws_not_installed'),
                             category='service')
                         return
-                    ok, err = self.nfqws.start()
-                    ok = ok and self.nfqws.is_service_active()
-                    if ok:
-                        # даём правилам примениться и проверяем
-                        time.sleep(1)
-                        if not self.nfqws.rules_active():
-                            ok, err = False, t('engine.rules_not_applied')
+                # САМ СЕРВИС НЕ ЗАПУСКАЕМ — только выбор
 
-                if ok:
-                    self.current_params['engine'] = engine
-                    self.save_config()
-                    # ⭐ boot-флаги: автозапуск на загрузке — только выбранному
-                    # движку. Порядок безопасный: сначала enable выбранного,
-                    # и только при успехе disable другого (при провале enable
-                    # старые флаги нетронуты — ребут поднимет хоть что-то).
-                    want_unit = ('ciadpi.service' if engine == 'byedpi'
-                                 else 'ciadpi-nfqws.service')
-                    other_unit = ('ciadpi-nfqws.service' if engine == 'byedpi'
-                                  else 'ciadpi.service')
-                    ok_e, err_e = self._unit_boot_ctl(want_unit, True)
-                    if ok_e:
-                        ok_d, err_d = self._unit_boot_ctl(other_unit, False)
-                        if not ok_d:
-                            print(f"⚠️ boot-флаг: disable {other_unit}: {err_d}")
-                    else:
-                        print(f"⚠️ boot-флаг: enable {want_unit}: {err_e}")
-                    self.show_notification(
-                        t('notif.success'),
-                        t('engine.now').format(
-                            name='byedpi (SOCKS)' if engine == 'byedpi'
-                            else 'nfqws (NFQUEUE)'),
-                        category='service')
+                self.current_params['engine'] = engine
+                self.save_config()
+                # ⭐ boot-флаги: на загрузке поднимется именно выбранный
+                # движок. Порядок безопасный: сначала enable выбранного,
+                # при успехе disable другого.
+                want_unit = ('ciadpi.service' if engine == 'byedpi'
+                             else 'ciadpi-nfqws.service')
+                other_unit = ('ciadpi-nfqws.service' if engine == 'byedpi'
+                              else 'ciadpi.service')
+                ok_e, err_e = self._unit_boot_ctl(want_unit, True)
+                if ok_e:
+                    ok_d, err_d = self._unit_boot_ctl(other_unit, False)
+                    if not ok_d:
+                        print(f"⚠️ boot-флаг: disable {other_unit}: {err_d}")
                 else:
-                    self.show_notification(t('notif.error'),
-                                           err or 'switch failed',
-                                           category='service')
+                    print(f"⚠️ boot-флаг: enable {want_unit}: {err_e}")
+                self.show_notification(
+                    t('notif.success'),
+                    t('engine.selected').format(
+                        name='byedpi (SOCKS)' if engine == 'byedpi'
+                        else 'nfqws (NFQUEUE)'),
+                    category='service')
                 self.update_status()
                 self.rebuild_menu()
             finally:
@@ -3806,31 +3793,55 @@ class AdvancedTrayIndicator:
     # ================= /КОНСТРУКТОР ПАРАМЕТРОВ =================
 
     def show_help(self, widget):
-        """Окно расширенной справки по параметрам (на языке интерфейса)"""
-        lang = get_lang()
-        help_text = HELP_TEXTS.get(lang) or HELP_TEXTS.get('ru', '')
-        if not help_text:
-            help_text = "Справка недоступна / Reference unavailable"
+        """Окно справки: общая часть + сворачиваемые секции по темам.
 
+        ⭐ v1.9.1 (user): раньше — одна простыня текста, где byedpi- и
+        nfqws-материал мешались. Теперь Gtk.Expander («▸ заголовок»,
+        раскрывается по плюсику в строке): общее описание всегда видно,
+        детали каждого движка раскрываются только когда нужны.
+        Тексты секций — HELP_SECTIONS в ciadpi_texts.py (ru/en).
+        """
+        lang = get_lang()
+        sections = HELP_SECTIONS.get(lang) or HELP_SECTIONS.get('ru', {})
+        if not sections:
+            self.show_notification(t('notif.error'), 'Справка недоступна')
+            return
 
         dialog = Gtk.Dialog(title=t('help.title'), flags=0)
         dialog.add_buttons(t('btn.ok'), Gtk.ResponseType.OK)
-        dialog.set_default_size(600, 500)
-        
+        dialog.set_default_size(620, 560)
+
         content_area = dialog.get_content_area()
         scroll = Gtk.ScrolledWindow()
-        
-        text_view = Gtk.TextView()
-        text_view.set_editable(False)
-        text_view.set_wrap_mode(Gtk.WrapMode.WORD)
-        
-        buffer = text_view.get_buffer()
-        buffer.set_text(help_text)
-        
-        scroll.add(text_view)
+        scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        box.set_margin_top(10); box.set_margin_bottom(10)
+        box.set_margin_start(10); box.set_margin_end(10)
+
+        for header, body in sections:
+            if header is None:
+                # None-ключ = общий текст без сворачивания (интро)
+                lbl = Gtk.Label()
+                lbl.set_markup(body)
+                lbl.set_xalign(0)
+                lbl.set_line_wrap(True)
+                lbl.set_selectable(True)
+                box.pack_start(lbl, False, False, 0)
+                continue
+            exp = Gtk.Expander(label=header)
+            exp.set_use_markup(True)
+            tv = Gtk.TextView()
+            tv.set_editable(False)
+            tv.set_wrap_mode(Gtk.WrapMode.WORD)
+            tv.get_buffer().set_text(body)
+            tv.set_left_margin(8); tv.set_right_margin(8)
+            tv.set_top_margin(4); tv.set_bottom_margin(4)
+            exp.add(tv)
+            box.pack_start(exp, False, False, 0)
+
+        scroll.add(box)
         content_area.pack_start(scroll, True, True, 0)
         content_area.show_all()
-        
         dialog.run()
         dialog.destroy()
 
