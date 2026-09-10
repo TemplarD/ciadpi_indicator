@@ -205,15 +205,29 @@ TimeoutStartSec=30
 WantedBy=multi-user.target
 """
 
+    # Глаголы, требующие root: прямой вызов systemctl без sudo порождает
+    # polkit-диалог пароля на каждый вызов (их бывает много — очередь
+    # диалогов «вешает» сессию). Покрыты passwordless в sudoers → sudo -n.
+    _PRIVILEGED_VERBS = {'start', 'stop', 'restart', 'reload',
+                         'enable', 'disable', 'mask', 'unmask',
+                         'daemon-reload'}
+
     def _systemctl(self, *args, timeout=60):
-        """systemctl с fallback-цепочкой: direct → sudo -n → pkexec.
+        """systemctl с fallback-цепочкой. Для привилегированных глаголов:
+        sudo -n → pkexec (один диалог). Для чтения: direct → sudo -n.
         Read-only verbs (is-active/status/show) возвращают данные даже
         при nonzero exit — это не ошибка."""
-        cmds = [
-            ['systemctl', *args],
-            ['sudo', '-n', self._resolve_bin('SYSTEMCTL_BIN'), *args],
-            ['pkexec', 'systemctl', *args],
-        ]
+        privileged = bool(args) and args[0] in self._PRIVILEGED_VERBS
+        if privileged:
+            cmds = [
+                ['sudo', '-n', self._resolve_bin('SYSTEMCTL_BIN'), *args],
+                ['pkexec', 'systemctl', *args],
+            ]
+        else:
+            cmds = [
+                ['systemctl', *args],
+                ['sudo', '-n', self._resolve_bin('SYSTEMCTL_BIN'), *args],
+            ]
         last_err = ''
         for cmd in cmds:
             try:
@@ -282,6 +296,16 @@ WantedBy=multi-user.target
     def is_service_active(self):
         ok, out = self._systemctl('is-active', self.SERVICE)
         return ok and (out or '').lower() == 'active'
+
+    def set_enabled(self, enabled: bool):
+        """Enable/disable ciadpi-nfqws.service (boot-автозапуск).
+
+        Глаголы enable/disable есть в sudoers (passwordless). is-enabled
+        в sudoers НЕ входит, поэтому НЕ читать его через sudo — только
+        напрямую (без прав не требует).
+        """
+        verb = 'enable' if enabled else 'disable'
+        return self._systemctl(verb, self.SERVICE)
 
     def start(self, params=None):
         """Устанавливает юнит (если нужно) и запускает сервис."""

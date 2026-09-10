@@ -59,8 +59,9 @@ HELP_TEXTS = {
     останавливает другой движок и снимает его настройки.
 
     При активном nfqws пункты, применимые только к byedpi (настройки
-    параметров, конструктор, прокси, поиск стратегии), становятся
-    серыми. Параметры nfqws — в «Движок обхода → Параметры nfqws»
+    параметров, конструктор, прокси, поиск стратегии), скрыты из меню —
+    показываются только пункты активного движка. Параметры nfqws —
+    в «Движок обхода → Параметры nfqws»
     (формат zapret: --dpi-desync=…, с примерами и проверкой).
 
     ⭐ ГЛАВНЫЙ ПРИНЦИП РАБОТЫ:
@@ -215,7 +216,8 @@ HELP_TEXTS = {
     switch stops the other engine and removes its settings itself.
 
     While nfqws is active, byedpi-only menu items (parameter
-    settings, builder, proxy, strategy search) are greyed out.
+    settings, builder, proxy, strategy search) are hidden from
+    the menu — only the active engine's items are shown.
     nfqws parameters live in "Bypass engine → nfqws parameters"
     (zapret format: --dpi-desync=..., with examples and validation).
 

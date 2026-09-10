@@ -170,7 +170,13 @@ class AdvancedTrayIndicator:
         GLib.timeout_add(3000, self.restore_our_proxy_on_startup)
 
         # применяем настройки прокси из конфига при запуске
-        GLib.timeout_add(3000, self.apply_proxy_from_config)        
+        GLib.timeout_add(3000, self.apply_proxy_from_config)
+
+        # ⭐ boot-флаги: на старте трея приводим enable/disable к движку
+        # из конфига (одноразово, в фоне). Лечит «после ребута поднялся
+        # не тот движок» — например, когда сессия закончилась до того,
+        # как switch_engine успел выставить флаги.
+        GLib.timeout_add(4000, self.sync_boot_flags_once)
         
         log_debug("AdvancedTrayIndicator initialization completed")            
 
@@ -281,6 +287,69 @@ class AdvancedTrayIndicator:
         except Exception as e:
             print(f"Ошибка сохранения конфига: {e}")
 
+    def _unit_boot_ctl(self, unit, enable_it):
+        """enable/disable юнита, passwordless-безопасно. Возвращает (ok, err).
+
+        Оба юнита покрыты в sudoers глаголами enable/disable. nfqws-юнит
+        ведём через NfqwsManager (цепочка direct→sudo→pkexec), byedpi —
+        через self._systemctl (та же цепочка).
+        """
+        if unit == 'ciadpi-nfqws.service' and self.nfqws:
+            return self.nfqws.set_enabled(enable_it)
+        verb = 'enable' if enable_it else 'disable'
+        return self._systemctl(verb, unit)
+
+    def sync_boot_flags_once(self):
+        """Один раз на старте трея: enable/disable юнитов = движку из конфига.
+
+        Читает is-enabled напрямую (systemctl без sudo — чтение прав не
+        требует), меняет только при расхождении. Никогда не стартует и не
+        останавливает сервисы — только boot-флаги. Если enable/disable
+        недоступны (нет sudoers), просто пишет в лог и не мешает работе.
+        """
+        def worker():
+            try:
+                def read_enabled(unit):
+                    try:
+                        r = subprocess.run(
+                            ['systemctl', 'is-enabled', unit],
+                            capture_output=True, text=True, timeout=5)
+                        return (r.stdout or '').strip() == 'enabled'
+                    except Exception:
+                        return None  # не смогли прочитать — не трогаем
+
+                engine = self.current_params.get('engine', 'byedpi')
+                want = 'ciadpi-nfqws.service' if engine == 'nfqws' \
+                    else 'ciadpi.service'
+                other = 'ciadpi.service' if engine == 'nfqws' \
+                    else 'ciadpi-nfqws.service'
+
+                have_want = read_enabled(want)
+                have_other = read_enabled(other)
+                if have_want is None and have_other is None:
+                    return  # systemctl недоступен — молча выходим
+
+                changed = []
+                # сначала включаем нужный; другой отключаем только если
+                # нужный точно включён (иначе ребут останется без обхода)
+                want_on = have_want
+                if have_want is False:
+                    ok, err = self._unit_boot_ctl(want, True)
+                    changed.append(('enable', want, ok, err))
+                    want_on = ok
+                if have_other and want_on:
+                    ok, err = self._unit_boot_ctl(other, False)
+                    changed.append(('disable', other, ok, err))
+
+                for verb, unit, ok, err in changed:
+                    print(f"{'✅' if ok else '⚠️'} boot-флаг: {verb} {unit}"
+                          f"{' — ' + err if not ok and err else ''}")
+            except Exception as e:
+                print(f"⚠️ sync_boot_flags_once: {e}")
+
+        threading.Thread(target=worker, daemon=True).start()
+        return False  # одноразовый таймер
+
     def apply_proxy_from_config(self):
         """Применяем настройки прокси из конфига при запуске программы"""
         try:
@@ -377,23 +446,35 @@ class AdvancedTrayIndicator:
 
         return None, None
 
+    # Глаголы, требующие root. Для них НЕЛЬЗЯ звать systemctl напрямую:
+    # без sudo polkit рисует GUI-диалог пароля на КАЖДЫЙ вызов — а их в
+    # цепочке бывает много (диалоги складываются в очередь и «вешают»
+    # сессию). Эти глаголы покрыты passwordless-строками в sudoers
+    # (см. ciadpi_privileges.sh), поэтому сразу идём через sudo -n.
+    _PRIVILEGED_VERBS = {'start', 'stop', 'restart', 'reload',
+                         'enable', 'disable', 'mask', 'unmask',
+                         'daemon-reload'}
+
     def _systemctl(self, *args):
         """Запуск systemctl для ciadpi.service с fallback на pkexec (GUI-пароль).
         Возвращает (ok, stderr)."""
-        # 1) Пробуем напрямую (работает при NOPASSWD sudoers или polkit-правиле)
-        try:
-            r = subprocess.run(['systemctl', *args],
-                               capture_output=True, text=True, timeout=15)
-            if r.returncode == 0:
-                return True, ""
-            # Команды чтения (is-active/show/status) не требуют прав:
-            # ненулевой код = валидный ответ сервиса, не ошибка доступа
-            if args and args[0] in ('is-active', 'show', 'status',
-                                    'is-enabled', 'is-failed'):
-                return False, r.stdout.strip() or r.stderr.strip()
-        except Exception:
-            pass
-        # 2) sudo без пароля
+        privileged = bool(args) and args[0] in self._PRIVILEGED_VERBS
+        # 1) Прямой вызов — только для чтения (прав не требует, polkit
+        #    не трогает). Команды чтения при nonzero-коде возвращают
+        #    валидный ответ сервиса, а не ошибку доступа.
+        if not privileged:
+            try:
+                r = subprocess.run(['systemctl', *args],
+                                   capture_output=True, text=True, timeout=15)
+                if r.returncode == 0:
+                    return True, ""
+                if args and args[0] in ('is-active', 'show', 'status',
+                                        'is-enabled', 'is-failed'):
+                    return False, r.stdout.strip() or r.stderr.strip()
+            except Exception:
+                pass
+        # 2) sudo без пароля — главный путь для привилегированных глаголов
+        #    (и второй шанс для чтения, если прямой не удался)
         try:
             r = subprocess.run(['sudo', '-n', 'systemctl', *args],
                                capture_output=True, text=True, timeout=15)
@@ -401,16 +482,16 @@ class AdvancedTrayIndicator:
                 return True, ""
         except Exception:
             pass
-        # 3) pkexec — спросит пароль через GUI-агент
-        try:
-            r = subprocess.run(['pkexec', 'systemctl', *args],
-                               capture_output=True, text=True, timeout=120)
-            if r.returncode == 0:
-                return True, ""
-        except FileNotFoundError:
-            pass
-        except subprocess.TimeoutExpired:
-            pass
+        # 3) pkexec — ОДИН диалог пароля, только если sudoers не покрывает
+        #    (крайний случай; при настроенных правах сюда не доходим)
+        if privileged:
+            try:
+                r = subprocess.run(['pkexec', 'systemctl', *args],
+                                   capture_output=True, text=True, timeout=120)
+                if r.returncode == 0:
+                    return True, ""
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                pass
 
         # 4) Не удалось — предлагаем одноразовую настройку прав
         self._offer_privileges_setup()
@@ -1046,6 +1127,11 @@ class AdvancedTrayIndicator:
     def create_menu(self):
         menu = Gtk.Menu()
         
+        # ⭐ Активен ли nfqws: от этого зависит, какие пункты (какого
+        # движка) показывать в меню. Вычисляем один раз на сборку меню.
+        engine_is_nfqws = (NFQWS_AVAILABLE and self.nfqws
+                           and self._active_engine() == 'nfqws')
+
         # Статус
         self.status_item = Gtk.MenuItem(label=t('menu.status'))
         menu.append(self.status_item)
@@ -1071,11 +1157,10 @@ class AdvancedTrayIndicator:
         settings_item = Gtk.MenuItem(label=t('menu.settings'))
         settings_item.connect("activate", self.show_settings)
         # ⭐ Параметры в «Настройках» — byedpi-специфичные (формат -T3 -A…):
-        # при активном nfqws они неприменимы, пункт серый
-        if NFQWS_AVAILABLE and self.nfqws and self._active_engine() == 'nfqws':
-            settings_item.set_sensitive(False)
-            settings_item.set_tooltip_text(t('engine.byedpi_only'))
-        menu.append(settings_item)
+        # при активном nfqws пункт скрыт (параметры другого движка в меню
+        # не показываем — их нельзя применить)
+        if not engine_is_nfqws:
+            menu.append(settings_item)
 
         # ⭐ Движок обхода: ползунок byedpi ↔ nfqws прямо в меню.
         # Переключатель показывает текущее состояние (не нужно раскрывать
@@ -1125,7 +1210,10 @@ class AdvancedTrayIndicator:
 
             nfqws_params_item = Gtk.MenuItem(label=t('engine.nfqws_params_menu'))
             nfqws_params_item.connect("activate", self.show_nfqws_settings)
-            engine_menu.append(nfqws_params_item)
+            # при byedpi пункт скрыт — параметры чужого движка не показываем;
+            # после переключения на nfqws меню пересоберётся и пункт появится
+            if active_engine == 'nfqws':
+                engine_menu.append(nfqws_params_item)
 
             engine_item.set_submenu(engine_menu)
             menu.append(engine_item)
@@ -1133,26 +1221,20 @@ class AdvancedTrayIndicator:
             # self._engine_switch хранит ссылку для синка в update_status
             self._engine_switch = engine_switch
 
-        # ⭐ ПРИ NFQWS: byedpi-специфичные пункты — серые (неактивны),
-        # универсальные (справка, настройки приложения, логи, права,
-        # о программе) — активны всегда.
-        engine_is_nfqws = (NFQWS_AVAILABLE and self.nfqws
-                           and self._active_engine() == 'nfqws')
-
-        if PARAMS_SPEC_AVAILABLE:
+        # ⭐ ПРИ NFQWS: пункты чужого движка (byedpi) вообще не попадают
+        # в меню — сереть/прятать нечего, при смене движка меню
+        # пересобирается (rebuild_menu) и набор пунктов меняется сам.
+        # Универсальные (справка, настройки приложения, логи, права,
+        # о программе) — показываются всегда.
+        if PARAMS_SPEC_AVAILABLE and not engine_is_nfqws:
             builder_item = Gtk.MenuItem(label=t('menu.builder'))
             builder_item.connect("activate", self.show_param_builder)
-            if engine_is_nfqws:
-                builder_item.set_sensitive(False)
-                builder_item.set_tooltip_text(t('engine.byedpi_only'))
             menu.append(builder_item)
 
         proxy_item = Gtk.MenuItem(label=t('menu.proxy'))
         proxy_item.connect("activate", self.show_proxy_settings)
-        if engine_is_nfqws:
-            proxy_item.set_sensitive(False)
-            proxy_item.set_tooltip_text(t('engine.nfqws_no_proxy'))
-        menu.append(proxy_item)
+        if not engine_is_nfqws:
+            menu.append(proxy_item)
 
         # БЕЛЫЙ СПИСОК (универсален: перечень «своих» хостов, nfqws
         # сейчас его не использует, но он пригодится при расширении)
@@ -1162,8 +1244,8 @@ class AdvancedTrayIndicator:
         
         menu.append(Gtk.SeparatorMenuItem())
         
-        # Автопоиск и история
-        if self.autosearcher:
+        # Автопоиск и история (ищет параметры byedpi — при nfqws скрыты)
+        if self.autosearcher and not engine_is_nfqws:
             autosearch_item = Gtk.MenuItem(label=t('menu.autosearch'))
             autosearch_item.connect("activate", self.show_autosearch_dialog)
             menu.append(autosearch_item)
@@ -1175,18 +1257,17 @@ class AdvancedTrayIndicator:
             menu.append(Gtk.SeparatorMenuItem())
 
         # Поиск стратегии: перебирает ПАРАМЕТРЫ byedpi — при nfqws
-        # серый (найденные параметры всё равно применимы только к byedpi)
-        strategy_item = Gtk.MenuItem(label=t('menu.strategy'))
-        strategy_item.connect("activate", self.show_strategy_search)
-        if engine_is_nfqws:
-            strategy_item.set_sensitive(False)
-            strategy_item.set_tooltip_text(t('engine.byedpi_only'))
-        menu.append(strategy_item)
+        # скрыт (найденные параметры всё равно применимы только к byedpi)
+        if not engine_is_nfqws:
+            strategy_item = Gtk.MenuItem(label=t('menu.strategy'))
+            strategy_item.connect("activate", self.show_strategy_search)
+            menu.append(strategy_item)
 
-        # Обновление byedpi без переустановки
-        byedpi_update_item = Gtk.MenuItem(label=t('menu.byedpi_update'))
-        byedpi_update_item.connect("activate", self.update_byedpi)
-        menu.append(byedpi_update_item)
+        # Обновление byedpi без переустановки — byedpi-пункт
+        if not engine_is_nfqws:
+            byedpi_update_item = Gtk.MenuItem(label=t('menu.byedpi_update'))
+            byedpi_update_item.connect("activate", self.update_byedpi)
+            menu.append(byedpi_update_item)
 
         # Одноразовая настройка беспарольного доступа
         privileges_item = Gtk.MenuItem(label=t('menu.privileges'))
@@ -2474,6 +2555,21 @@ class AdvancedTrayIndicator:
                 if ok:
                     self.current_params['engine'] = engine
                     self.save_config()
+                    # ⭐ boot-флаги: автозапуск на загрузке — только выбранному
+                    # движку. Порядок безопасный: сначала enable выбранного,
+                    # и только при успехе disable другого (при провале enable
+                    # старые флаги нетронуты — ребут поднимет хоть что-то).
+                    want_unit = ('ciadpi.service' if engine == 'byedpi'
+                                 else 'ciadpi-nfqws.service')
+                    other_unit = ('ciadpi-nfqws.service' if engine == 'byedpi'
+                                  else 'ciadpi.service')
+                    ok_e, err_e = self._unit_boot_ctl(want_unit, True)
+                    if ok_e:
+                        ok_d, err_d = self._unit_boot_ctl(other_unit, False)
+                        if not ok_d:
+                            print(f"⚠️ boot-флаг: disable {other_unit}: {err_d}")
+                    else:
+                        print(f"⚠️ boot-флаг: enable {want_unit}: {err_e}")
                     self.show_notification(
                         t('notif.success'),
                         t('engine.now').format(
