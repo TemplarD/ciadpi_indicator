@@ -351,8 +351,30 @@ class AdvancedTrayIndicator:
         return False  # одноразовый таймер
 
     def apply_proxy_from_config(self):
-        """Применяем настройки прокси из конфига при запуске программы"""
+        """Применяем настройки прокси из конфига при запуске программы.
+
+        ⭐ v1.9.1: при выбранном nfqws системный прокси НЕ применяется
+        ВООБЩЕ (NFQUEUE перехватывает все пакеты сам; manual на мёртвом
+        byedpi-порту только ломает браузеры). Если конфиг ещё хранит
+        включённый прокси с byedpi-времён — сбрасываем настройки в
+        'none' и чистим флаг, чтобы хвост не оживал на каждом старте.
+        """
         try:
+            engine = (self.current_params or {}).get('engine', 'byedpi')
+            if engine == 'nfqws':
+                if self.current_params.get("proxy_enabled", False):
+                    print("🔌 engine=nfqws: системный прокси не нужен — "
+                          "сбрасываем хвост byedpi-настроек")
+                    subprocess.run(
+                        ['gsettings', 'set', 'org.gnome.system.proxy',
+                         'mode', 'none'],
+                        capture_output=True, timeout=5)
+                    self.current_params["proxy_enabled"] = False
+                    self.current_params["we_changed_proxy"] = False
+                    self.we_changed_proxy = False
+                    self.save_config()
+                return False
+
             proxy_mode = self.current_params.get("proxy_mode")
 
             # ⭐ ЛОКАЛЬНЫЙ РЕЖИМ: системные настройки НЕ трогаем
