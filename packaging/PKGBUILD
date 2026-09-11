@@ -2,7 +2,7 @@
 # CIADPI Indicator — системный трей для управления byedpi (ciadpi)
 
 pkgname=ciadpi-indicator
-pkgver=1.9.2
+pkgver=2.0.0
 pkgrel=1
 pkgdesc="System tray indicator for CIADPI/byedpi DPI bypass (RU/EN, dual engine: byedpi/nfqws, until-found search)"
 arch=('any')
@@ -42,6 +42,7 @@ package() {
         ciadpi_param_generator.py \
         ciadpi_whitelist.py \
         ciadpi_nfqws.py \
+        ciadpi_snimod.py \
         diagnose_ciadpi.py
     do
         [ -f "$f" ] && install -Dm644 "$f" "${pkgdir}${_moddir}/$f"
@@ -57,6 +58,15 @@ LAUNCHER
     chmod +x "${pkgdir}/usr/bin/ciadpi-indicator"
 
     install -Dm755 ciadpi_privileges.sh "${pkgdir}/usr/bin/ciadpi-privileges-setup"
+
+    # ⭐ v2.0: snimod — движок №3 (SNI case-mod, C-демон)
+    if [ -x snimod/bin/ciadpi_snimod ]; then
+        install -Dm755 snimod/bin/ciadpi_snimod "${pkgdir}${_moddir}/ciadpi_snimod"
+    elif make -C snimod >/dev/null 2>&1; then
+        install -Dm755 snimod/bin/ciadpi_snimod "${pkgdir}${_moddir}/ciadpi_snimod"
+    else
+        warning "snimod not built — engine #3 unavailable (need libnetfilter_queue-dev)"
+    fi
 
     # Диагностика
     if [ -f diagnose_ciadpi.py ]; then

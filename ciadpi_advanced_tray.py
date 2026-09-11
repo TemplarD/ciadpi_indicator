@@ -84,6 +84,20 @@ except ImportError as e:
     NFQWS_AVAILABLE = False
     NfqwsManager = None
 
+# ⭐ v2.0: snimod — движок №3 (НАША разработка, нет в byedpi/zapret):
+# SNI case-mod. DPI прова ловит подстроку "www.youtube.com" в нижнем
+# регистре; фильтр регистрозависим — "WWW.YOUTUBE.COM" проходит, а
+# серверу регистр безразличен (RFC 6066). Демон на C переписывает
+# регистр SNI на лету через NFQUEUE (qnum 210, таблица ciadpi_snimod).
+try:
+    from ciadpi_snimod import SnimodManager
+    SNIMOD_AVAILABLE = True
+    print("✅ Модуль snimod (движок №3) загружен")
+except ImportError as e:
+    print(f"⚠️ Модуль snimod не доступен: {e}")
+    SNIMOD_AVAILABLE = False
+    SnimodManager = None
+
 # Отладочная информация
 DEBUG_LOG = Path.home() / '.config' / 'ciadpi' / 'indicator_debug.log'
 
@@ -151,6 +165,9 @@ class AdvancedTrayIndicator:
 
         # ⭐ nfqws-движок: создаём менеджер, если модуль доступен
         self.nfqws = NfqwsManager() if NFQWS_AVAILABLE else None
+
+        # ⭐ v2.0: snimod — движок №3 (SNI case-mod)
+        self.snimod = SnimodManager() if SNIMOD_AVAILABLE else None
 
         # ОДИН таймер для проверки прокси
         GLib.timeout_add(5000, self.check_current_proxy)
@@ -368,7 +385,7 @@ class AdvancedTrayIndicator:
         """
         try:
             engine = (self.current_params or {}).get('engine', 'byedpi')
-            if engine == 'nfqws':
+            if engine in ('nfqws', 'snimod'):
                 if self.current_params.get("proxy_enabled", False):
                     print("🔌 engine=nfqws: системный прокси не нужен — "
                           "сбрасываем хвост byedpi-настроек")
@@ -1191,76 +1208,61 @@ class AdvancedTrayIndicator:
         if not engine_is_nfqws:
             menu.append(settings_item)
 
-        # ⭐ Движок обхода: чекбокс «nfqws (NFQUEUE для всех)» ПРЯМО в меню
-        # верхнего уровня — один клик без подменю (user: «чанжбокс с
-        # подписью, не вложенное меню»). Gtk.CheckMenuItem — единственный
-        # нативно кликаемый переключатель в AppIndicator/DBusMenu
-        # (ползунки и embedded-виджеты кликов не получают).
-        # Синк из update_status под guard-флагом: программный set_active
-        # тоже стреляет toggled — без guard тикер «кликал» за пользователя.
-        if NFQWS_AVAILABLE and self.nfqws:
-            active_engine = self._active_engine()
+        # ⭐ v2.0 (user: «должен быть ПЕРЕКЛЮЧАТЕЛЬ — кружочек в
+        # овальчике с подписью, не пункт меню с текстом»): в меню
+        # AppIndicator свичи невозможны (DBusMenu = только галочка/
+        # радио), поэтому пункт «Движки обхода…» открывает окно с
+        # НАСТОЯЩИМИ Gtk.Switch — кружочек в овальчике, переключение
+        # без закрытия, статус обновляется живьём. Текст пункта
+        # показывает текущий выбор.
+        engines_item = Gtk.MenuItem(label='⚙ Движки обхода…')
+        engine_names = {'byedpi': 'byedpi (SOCKS)',
+                        'nfqws': 'nfqws (NFQUEUE)',
+                        'snimod': 'snimod (SNI case-mod)'}
+        eng_now = (NFQWS_AVAILABLE or True) and self._active_engine()
+        engines_item.set_label(
+            f"⚙ Движки обхода…  [выбран: "
+            f"{engine_names.get(eng_now, eng_now)}]")
+        engines_item.set_tooltip_text(
+            'Окно с переключателями-свичами: byedpi ↔ nfqws ↔ snimod')
+        engines_item.connect("activate", self.show_engines_window)
+        menu.append(engines_item)
+        # помечаем для синка текста из update_status
+        self._engines_item = engines_item
+        self._engine_names_map = engine_names
 
-            # ⭐ v1.9.2 (user: «чейнджбокка нет, всё ещё просто пункт меню;
-            # может, переопределить стили, чтобы в списке были и графические
-            # элементы»): GNOME Shell перерисовывает DBusMenu-меню собственным
-            # стилем и галочку CheckMenuItem там может быть НЕ ВИДНО.
-            # Поэтому состояние дублируется глифом ☑/☐ прямо в тексте пункта —
-            # оно видно в ЛЮБОМ трее (AppIndicator, StatusIcon, XFCE…).
-            # CheckMenuItem оставлен: где DBusMenu поддержан нативно, там
-            # пункт остаётся кликаемым чекбоксом.
-            def _engine_check_label(is_on):
-                glyph = "☑" if is_on else "☐"
-                return f"{glyph} {t('engine.nfqws_on')}"
+        # Статус выбранного движка отдельной строкой (при NFQUEUE-режимах;
+        # при byedpi строки нет — меньше мусора в меню)
+        if eng_now in ('nfqws', 'snimod'):
+            unit = ('ciadpi-nfqws.service' if eng_now == 'nfqws'
+                    else 'ciadpi-snimod.service')
+            try:
+                r = subprocess.run(
+                    ['systemctl', 'is-active', unit],
+                    capture_output=True, text=True, timeout=2)
+                svc_st = (r.stdout or '').strip() or 'unknown'
+            except Exception:
+                svc_st = 'unknown'
+            svc_item = Gtk.MenuItem(
+                label=t('engine.hint_service').format(st=svc_st))
+            svc_item.set_sensitive(False)
+            menu.append(svc_item)
 
-            engine_check = Gtk.CheckMenuItem(label=_engine_check_label(
-                active_engine == 'nfqws'))
-            engine_check.set_active(active_engine == 'nfqws')
-            engine_check.set_tooltip_text(t('engine.switch_hint'))
-            # помечаем для синка: и галочка, и ГЛИФ в тексте
-            self._engine_check_label_fn = _engine_check_label
-
-            def on_engine_toggled(widget):
-                # обрабатываем ТОЛЬКО клики пользователя: программный
-                # синк ставит _engine_syncing и в этот момент не меняет движок
-                if getattr(self, '_engine_syncing', False):
-                    return
-                want = 'nfqws' if widget.get_active() else 'byedpi'
-                if want != self._active_engine():
-                    GLib.idle_add(self.switch_engine, None, want)
-                else:
-                    # визуально уже верно, но сервис-статус вернёт rebuild
-                    pass
-            engine_check.connect("toggled", on_engine_toggled)
-
-            menu.append(engine_check)
-            # ⭐ чекбокс живёт в главном меню: обновления состояния —
-            # по ссылке из update_status (там же guard).
-            self._engine_check = engine_check
-
-            # Статус выбранного движка отдельной строкой (только при
-            # nfqws; при byedpi строки нет — меньше мусора в меню)
-            if active_engine == 'nfqws':
-                try:
-                    r = subprocess.run(
-                        ['systemctl', 'is-active', 'ciadpi-nfqws.service'],
-                        capture_output=True, text=True, timeout=2)
-                    svc_st = (r.stdout or '').strip() or 'unknown'
-                except Exception:
-                    svc_st = 'unknown'
-                svc_item = Gtk.MenuItem(
-                    label=t('engine.hint_service').format(st=svc_st))
-                svc_item.set_sensitive(False)
-                menu.append(svc_item)
-
-                # ⭐ Параметры nfqws — прямо в главном меню (симметрия
-                # с byedpi-«Настройками»; user: пункт был запрятан в
-                # подменю движка, которого больше нет)
+            # ⭐ Параметры движка — прямо в главном меню (симметрия
+            # с byedpi-«Настройками»; user: пункт был запрятан в
+            # подменю движка, которого больше нет)
+            if eng_now == 'nfqws' and self.nfqws:
                 nfqws_params_item = Gtk.MenuItem(
                     label=t('engine.nfqws_params_menu'))
                 nfqws_params_item.connect("activate",
                                           self.show_nfqws_settings)
                 menu.append(nfqws_params_item)
+            if eng_now == 'snimod' and self.snimod:
+                snimod_params_item = Gtk.MenuItem(
+                    label='Хосты snimod…')
+                snimod_params_item.connect("activate",
+                                           self.show_snimod_settings)
+                menu.append(snimod_params_item)
 
         # ⭐ ПРИ NFQWS: пункты чужого движка (byedpi) вообще не попадают
         # в меню — сереть/прятать нечего, при смене движка меню
@@ -1383,26 +1385,17 @@ class AdvancedTrayIndicator:
             if hasattr(self, 'status_item') and self.status_item:
                 self.status_item.set_label(status_label)
 
-            # ⭐ синк чекбокса движка (меню пересобирается редко). GUARD:
-            # программный set_active тоже стреляет toggled — без флага
-            # тикер «кликал» за пользователя и менял движок при каждом
-            # изменении статуса сервиса (запуск/остановка = смена режима!).
-            # ⭐ v1.9.2: синкаем и ГЛИФ ☑/☐ в тексте пункта (в GNOME Shell
-            # галочка CheckMenuItem может не отрисоваться — текст виден
-            # всегда).
-            chk = getattr(self, '_engine_check', None)
-            if chk is not None:
-                want = engine == 'nfqws'
+            # ⭐ v2.0: синк пункта «Движки обхода…» — текст показывает
+            # текущий выбранный движок (меню пересобирается редко).
+            item = getattr(self, '_engines_item', None)
+            names = getattr(self, '_engine_names_map', None) or {}
+            if item is not None:
                 try:
-                    label_fn = getattr(self, '_engine_check_label_fn', None)
-                    if label_fn is not None:
-                        chk.set_label(label_fn(want))
-                    if chk.get_active() != want:
-                        self._engine_syncing = True
-                        chk.set_active(want)
-                        self._engine_syncing = False
+                    item.set_label(
+                        f"⚙ Движки обхода…  [выбран: "
+                        f"{names.get(engine, engine)}]")
                 except Exception:
-                    self._engine_syncing = False
+                    pass
 
             if hasattr(self, 'indicator') and self.indicator:
                 if status == 'active':
@@ -2398,6 +2391,25 @@ class AdvancedTrayIndicator:
             threading.Thread(target=start_nfqws, daemon=True).start()
             return
 
+        # ⭐ v2.0: snimod-движок (SNI case-mod)
+        sni = self.snimod
+        if SNIMOD_AVAILABLE and sni and self._active_engine() == 'snimod':
+            def start_snimod():
+                ok, err = sni.start()
+                if ok:
+                    self.show_notification(
+                        t('notif.success'),
+                        'snimod: SNI case-mod запущен',
+                        category='service')
+                else:
+                    self.show_notification(t('notif.error'),
+                                           err or 'start failed',
+                                           category='service')
+                self.update_status()
+                self.rebuild_menu()
+            threading.Thread(target=start_snimod, daemon=True).start()
+            return
+
         def start_with_proxy_restore():
             try:
                 # Запускаем сервис через универсальный _systemctl
@@ -2465,6 +2477,24 @@ class AdvancedTrayIndicator:
             threading.Thread(target=stop_nfqws, daemon=True).start()
             return
 
+        # ⭐ v2.0: snimod-движок (SNI case-mod)
+        sni = self.snimod
+        if SNIMOD_AVAILABLE and sni and self._active_engine() == 'snimod':
+            def stop_snimod():
+                ok, err = sni.stop()
+                if ok:
+                    self.show_notification(t('notif.service_stopped'),
+                                           t('proxy.mode_off'),
+                                           category='service')
+                else:
+                    self.show_notification(t('notif.error'),
+                                           err or 'stop failed',
+                                           category='service')
+                self.update_status()
+                self.rebuild_menu()
+            threading.Thread(target=stop_snimod, daemon=True).start()
+            return
+
         if self.current_params.get("auto_disable_proxy", False) and self.we_changed_proxy:
             # Автоотключение включено И мы меняли прокси
             def stop_with_proxy_restore():
@@ -2501,7 +2531,7 @@ class AdvancedTrayIndicator:
             self.run_command("systemctl stop ciadpi.service")
 
     def restart_service(self, widget):
-        """Перезапуск АКТИВНОГО движка (nfqws или byedpi)."""
+        """Перезапуск АКТИВНОГО движка (byedpi / nfqws / snimod)."""
         nfq = self.nfqws
         if NFQWS_AVAILABLE and nfq and self._active_engine() == 'nfqws':
             def restart_nfqws():
@@ -2518,12 +2548,30 @@ class AdvancedTrayIndicator:
                 self.update_status()
             threading.Thread(target=restart_nfqws, daemon=True).start()
             return
+        # ⭐ v2.0: snimod-движок (SNI case-mod)
+        sni = self.snimod
+        if SNIMOD_AVAILABLE and sni and self._active_engine() == 'snimod':
+            def restart_snimod():
+                ok, err = sni.stop()
+                ok2, err2 = sni.start()
+                if ok and ok2:
+                    self.show_notification(t('notif.success'),
+                                           'snimod: перезапущен',
+                                           category='service')
+                else:
+                    self.show_notification(t('notif.error'),
+                                           (err2 or err or 'restart failed'),
+                                           category='service')
+                self.update_status()
+            threading.Thread(target=restart_snimod, daemon=True).start()
+            return
         self.run_command("systemctl restart ciadpi.service")
 
     # ---------------- Переключатель движка: byedpi ↔ nfqws ----------------
 
     def _active_engine(self):
-        """Какой движок ВЫБРАН: 'byedpi' | 'nfqws' — липкий выбор из конфига.
+        """Какой движок ВЫБРАН: 'byedpi' | 'nfqws' | 'snimod' — липкий
+        выбор из конфига.
 
         ⭐ Выбор движка НЕ зависит от живости сервиса: остановленный nfqws
         остаётся выбранным nfqws — меню, Start/Stop/Restart и статус
@@ -2531,10 +2579,14 @@ class AdvancedTrayIndicator:
         сервисов (оба inactive → None) — из-за этого «Остановить» менял
         режим на byedpi, а «Запустить» поднимал не тот движок.
         Живость сервиса — отдельный вопрос статуса, не выбора.
+
+        ⭐ v2.0: третий движок — snimod (SNI case-mod, наша разработка).
         """
         engine = (self.current_params or {}).get('engine', 'byedpi')
         if engine == 'nfqws' and not (NFQWS_AVAILABLE and self.nfqws):
             return 'byedpi'  # модуль nfqws недоступен — безопасный fallback
+        if engine == 'snimod' and not (SNIMOD_AVAILABLE and self.snimod):
+            return 'byedpi'  # snimod недоступен — безопасный fallback
         return engine
 
     def switch_engine(self, widget, engine):
@@ -2557,28 +2609,37 @@ class AdvancedTrayIndicator:
 
         def worker():
             try:
-                other = 'nfqws' if engine == 'byedpi' else 'byedpi'
-                print(f"🔄 Смена выбранного движка: {other} → {engine} "
+                all_engines = ('byedpi', 'nfqws', 'snimod')
+                prev = self._active_engine()
+                print(f"🔄 Смена выбранного движка: {prev} → {engine} "
                       f"(без автозапуска)")
 
-                # 1) останавливаем чужой движок (взаимоисключаемость)
-                if engine == 'byedpi' and self.nfqws:
-                    ok, err = self.nfqws.stop()
-                    if not ok:
-                        print(f"⚠️ nfqws stop: {err}")
-                    # страховка: правила могли остаться
-                    if not self.nfqws.rules_active():
-                        self.nfqws.remove_rules_fallback()
-                elif engine == 'nfqws':
-                    self._systemctl('stop', 'ciadpi.service')
-                    # ⭐ откат системного прокси — БЕЗУСЛОВНО: nfqws прокси
-                    # не использует, а manual на мёртвом порте ломает браузеры
+                # 1) останавливаем ВСЕ чужие движки (взаимоисключаемость)
+                for other in all_engines:
+                    if other == engine:
+                        continue
+                    if other == 'byedpi':
+                        self._systemctl('stop', 'ciadpi.service')
+                    elif other == 'nfqws' and self.nfqws:
+                        ok, err = self.nfqws.stop()
+                        if not ok:
+                            print(f"⚠️ nfqws stop: {err}")
+                        if not self.nfqws.rules_active():
+                            self.nfqws.remove_rules_fallback()
+                    elif other == 'snimod' and self.snimod:
+                        ok, err = self.snimod.stop()
+                        if not ok:
+                            print(f"⚠️ snimod stop: {err}")
+                        if not self.snimod.rules_active():
+                            self.snimod.remove_rules_fallback()
+                # ⭐ откат системного прокси — БЕЗУСЛОВНО при уходе с
+                # byedpi: NFQUEUE-движки прокси не используют, а manual
+                # на мёртвом порте ломает браузеры
+                if engine != 'byedpi':
                     try:
                         if self.we_changed_proxy:
                             self.restore_system_proxy_backup()
                         else:
-                            # мы прокси не меняли, но manual мог остаться от
-                            # byedpi-режима — сбрасываем в 'none'
                             subprocess.run(
                                 ['gsettings', 'set',
                                  'org.gnome.system.proxy', 'mode', 'none'],
@@ -2587,11 +2648,12 @@ class AdvancedTrayIndicator:
                         self.current_params['we_changed_proxy'] = False
                         self.current_params['proxy_enabled'] = False
                         self.save_config()
-                        print("🔌 Системный прокси сброшен (nfqws не использует)")
+                        print("🔌 Системный прокси сброшен "
+                              "(NFQUEUE-движки прокси не используют)")
                     except Exception as e:
                         print(f"⚠️ откат прокси при смене движка: {e}")
 
-                # 2) валидация nfqws перед ВЫБОРОМ
+                # 2) валидация перед ВЫБОРОМ
                 if engine == 'nfqws':
                     if not self.nfqws:
                         self.show_notification(t('notif.error'),
@@ -2603,29 +2665,42 @@ class AdvancedTrayIndicator:
                             t('notif.error'), t('engine.nfqws_not_installed'),
                             category='service')
                         return
+                if engine == 'snimod' and self.snimod \
+                        and not self.snimod.is_installed():
+                    self.show_notification(
+                        t('notif.error'),
+                        'snimod не собран: сделайте в snimod/ (make)',
+                        category='service')
+                    return
                 # САМ СЕРВИС НЕ ЗАПУСКАЕМ — только выбор
 
                 self.current_params['engine'] = engine
                 self.save_config()
                 # ⭐ boot-флаги: на загрузке поднимется именно выбранный
                 # движок. Порядок безопасный: сначала enable выбранного,
-                # при успехе disable другого.
-                want_unit = ('ciadpi.service' if engine == 'byedpi'
-                             else 'ciadpi-nfqws.service')
-                other_unit = ('ciadpi-nfqws.service' if engine == 'byedpi'
-                              else 'ciadpi.service')
+                # при успехе disable остальных.
+                want_unit = {'byedpi': 'ciadpi.service',
+                             'nfqws': 'ciadpi-nfqws.service',
+                             'snimod': 'ciadpi-snimod.service'}[engine]
                 ok_e, err_e = self._unit_boot_ctl(want_unit, True)
                 if ok_e:
-                    ok_d, err_d = self._unit_boot_ctl(other_unit, False)
-                    if not ok_d:
-                        print(f"⚠️ boot-флаг: disable {other_unit}: {err_d}")
+                    for other_unit in ('ciadpi.service',
+                                        'ciadpi-nfqws.service',
+                                        'ciadpi-snimod.service'):
+                        if other_unit != want_unit:
+                            ok_d, err_d = self._unit_boot_ctl(other_unit, False)
+                            if not ok_d:
+                                print(f"⚠️ boot-флаг: disable {other_unit}: "
+                                      f"{err_d}")
                 else:
                     print(f"⚠️ boot-флаг: enable {want_unit}: {err_e}")
+                engine_names = {'byedpi': 'byedpi (SOCKS)',
+                                'nfqws': 'nfqws (NFQUEUE)',
+                                'snimod': 'snimod (SNI case-mod)'}
                 self.show_notification(
                     t('notif.success'),
                     t('engine.selected').format(
-                        name='byedpi (SOCKS)' if engine == 'byedpi'
-                        else 'nfqws (NFQUEUE)'),
+                        name=engine_names.get(engine, engine)),
                     category='service')
                 self.update_status()
                 self.rebuild_menu()
@@ -2726,6 +2801,243 @@ class AdvancedTrayIndicator:
             if self.nfqws.is_service_active():
                 threading.Thread(target=self.nfqws.write_unit, args=(params,),
                                  daemon=True).start()
+            break
+        dialog.destroy()
+
+    # ---------------- ⭐ v2.0: окно-переключатель движков ----------------
+
+    def show_engines_window(self, widget=None):
+        """«Движки обхода…» — НАСТОЯЩИЕ переключатели Gtk.Switch.
+
+        ⭐ user: «должен быть переключатель, который работает без
+        закрытия меню и выглядит как кружочек в овальчике с подписью».
+        В меню AppIndicator это ФИЗИЧЕСКИ невозможно: протокол DBusMenu
+        поддерживает только toggle-type=checkmark/radio (исходники
+        ubuntu-appindicators это подтверждают) — свичи туда не
+        пробрасываются. Поэтому пункт меню открывает ЭТО окно, где
+        каждый движок — строка с живым Gtk.Switch (кружочек в
+        овальчике). Переключение кликом по свичу или по всей строке;
+        окно остаётся открытым, состояние обновляется мгновенно.
+
+        Правило сохранено (v1.9.1): выбор движка НЕ запускает сервис
+        — свич показывает ВЫБОР; отдельные кнопки «Запустить/Остановить»
+        поднимают выбранный движок прямо из окна.
+        """
+        active = self._active_engine()
+
+        dialog = Gtk.Dialog(title='Движки обхода DPI', flags=0)
+        dialog.set_default_size(460, 340)
+        content = dialog.get_content_area()
+        content.set_margin_top(10); content.set_margin_bottom(10)
+        content.set_margin_start(12); content.set_margin_end(12)
+
+        # описание движков
+        engines = [
+            ('byedpi', 'byedpi (SOCKS-прокси)',
+             'Локальный SOCKS5-прокси: обходят только приложения,\n'
+             'указавшие прокси (браузер, система). Требует настройки\n'
+             'прокси, зато не меняет пакеты других программ.'),
+            ('nfqws', 'nfqws (zapret, NFQUEUE)',
+             'Перехват пакетов ВСЕХ приложений через NFQUEUE.\n'
+             'Десинки: fake/split/disorder/ipfrag/multisplit/tamper\n'
+             'и др. Ноль настройки, но меняет весь исходящий TCP/UDP.'),
+            ('snimod', 'snimod — наш движок №3 (SNI case-mod)',
+             'Перехват ClientHello и подъём РЕГИСТРА SNI:\n'
+             'www.youtube.com → WWW.YOUTUBE.COM. Пров режет по\n'
+             'подстроке в нижнем регистре, фильтр регистрозависим,\n'
+             'а серверу регистр безразличен (RFC 6066). Идея наша,\n'
+             'её нет ни в byedpi, ни в zapret.'),
+        ]
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        switches = {}
+
+        def set_engine(name):
+            """Выбор движка (без автозапуска) + мгновенный синк свичей."""
+            if name != self._active_engine():
+                GLib.idle_add(self.switch_engine, None, name)
+            # локальный синк свичей (реальный переключит worker)
+            for k, sw in switches.items():
+                self._engine_syncing = True
+                sw.set_active(k == name)
+                self._engine_syncing = False
+
+        for name, title, desc in engines:
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
+                          spacing=10)
+            lbl_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL,
+                              spacing=2)
+            lbl = Gtk.Label()
+            lbl.set_markup(f'<b>{GLib.markup_escape_text(title)}</b>')
+            lbl.set_xalign(0)
+            hint = Gtk.Label()
+            hint.set_markup(
+                f'<small>{GLib.markup_escape_text(desc)}</small>')
+            hint.set_xalign(0)
+            hint.set_line_wrap(True)
+            lbl_box.pack_start(lbl, False, False, 0)
+            lbl_box.pack_start(hint, False, False, 0)
+            # свич: кружочек в овальчике
+            sw = Gtk.Switch()
+            sw.set_valign(Gtk.Align.CENTER)
+            sw.set_active(name == active)
+            # недоступные движки — серые
+            if name == 'nfqws' and not (NFQWS_AVAILABLE and self.nfqws
+                                        and self.nfqws.is_installed()):
+                sw.set_sensitive(False)
+                lbl.set_markup(
+                    f'<span strikethrough="true">'
+                    f'{GLib.markup_escape_text(title)}</span> '
+                    '(не установлен)')
+            if name == 'snimod' and not (SNIMOD_AVAILABLE and self.snimod
+                                         and self.snimod.is_installed()):
+                sw.set_sensitive(False)
+                lbl.set_markup(
+                    f'<span strikethrough="true">'
+                    f'{GLib.markup_escape_text(title)}</span> (не собран)')
+
+            def on_switch(widget_sw, state, name=name):
+                if getattr(self, '_engine_syncing', False):
+                    return
+                # свич показывает выбор; снятие = переход на byedpi
+                if state:
+                    set_engine(name)
+                elif name != 'byedpi':
+                    set_engine('byedpi')
+            sw.connect('state-set', on_switch)
+
+            def on_row_click(row_ev, ev, name=name):
+                # клик по строке тоже переключает
+                set_engine(name)
+            ev_row = Gtk.EventBox()
+            ev_row.add(lbl_box)
+            ev_row.connect('button-press-event', on_row_click)
+            ev_row.set_tooltip_text('Клик — выбрать этот движок')
+
+            row.pack_start(ev_row, True, True, 0)
+            row.pack_start(sw, False, False, 0)
+            box.pack_start(row, False, False, 4)
+            switches[name] = sw
+
+        # строка статуса выбранного сервиса
+        status_lbl = Gtk.Label()
+        status_lbl.set_xalign(0)
+
+        def refresh_status():
+            eng = self._active_engine()
+            unit = {'byedpi': 'ciadpi.service',
+                    'nfqws': 'ciadpi-nfqws.service',
+                    'snimod': 'ciadpi-snimod.service'}.get(eng)
+            try:
+                r = subprocess.run(
+                    ['systemctl', 'is-active', unit],
+                    capture_output=True, text=True, timeout=3)
+                st = (r.stdout or '').strip() or 'unknown'
+            except Exception:
+                st = 'unknown'
+            status_lbl.set_markup(
+                f'<small>Выбран: <b>{eng}</b> · сервис: {st}</small>')
+            return True
+        refresh_status()
+
+        # кнопки запуска/остановки выбранного движка
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
+                          spacing=8)
+        btn_start = Gtk.Button(label='Запустить выбранный')
+        btn_stop = Gtk.Button(label='Остановить')
+        btn_close = Gtk.Button(label='Закрыть')
+
+        def on_start_clicked(btn):
+            eng = self._active_engine()
+            self.start_service(None)
+            GLib.timeout_add_seconds(2, refresh_status)
+
+        def on_stop_clicked(btn):
+            eng = self._active_engine()
+            self.stop_service(None)
+            GLib.timeout_add_seconds(2, refresh_status)
+
+        btn_start.connect('clicked', on_start_clicked)
+        btn_stop.connect('clicked', on_stop_clicked)
+        btn_close.connect('clicked', lambda b: dialog.response(
+            Gtk.ResponseType.CLOSE))
+        btn_box.pack_start(btn_start, False, False, 0)
+        btn_box.pack_start(btn_stop, False, False, 0)
+        btn_box.pack_end(btn_close, False, False, 0)
+
+        box.pack_start(Gtk.Separator(), False, False, 2)
+        box.pack_start(status_lbl, False, False, 0)
+        box.pack_start(btn_box, False, False, 0)
+
+        content.pack_start(box, True, True, 0)
+        content.show_all()
+        # тикер статуса, пока окно открыто
+        timer = GLib.timeout_add_seconds(3, refresh_status)
+        dialog.run()
+        GLib.source_remove(timer)
+        dialog.destroy()
+
+    def show_snimod_settings(self, widget=None):
+        """Диалог настроек snimod: список хостов для uppercase SNI."""
+        if not self.snimod:
+            self.show_notification(t('notif.error'),
+                                    'snimod-модуль не доступен')
+            return
+        cfg = self.snimod.load_config()
+        hosts = cfg.get('hosts') or self.snimod.default_hosts
+
+        dialog = Gtk.Dialog(title='snimod: хосты SNI case-mod', flags=0)
+        dialog.add_buttons(t('btn.cancel'), Gtk.ResponseType.CANCEL,
+                           t('btn.ok'), Gtk.ResponseType.OK)
+        dialog.set_default_size(420, 300)
+        content = dialog.get_content_area()
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.set_margin_top(10); box.set_margin_bottom(10)
+        box.set_margin_start(10); box.set_margin_end(10)
+
+        lbl = Gtk.Label()
+        lbl.set_markup('<small>По одному хосту в строке. Регистр SNI этих\n'
+                       'хостов поднимается на лету (www.youtube.com →\n'
+                       'WWW.YOUTUBE.COM). Серверу регистр безразличен,\n'
+                       'DPI-подпись прова ломается.</small>')
+        lbl.set_xalign(0)
+        buf = Gtk.TextBuffer()
+        buf.set_text('\n'.join(hosts))
+        tv = Gtk.TextView(buffer=buf)
+        tv.set_monospace(True)
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_vexpand(True)
+        scroll.add(tv)
+
+        box.pack_start(lbl, False, False, 0)
+        box.pack_start(scroll, True, True, 0)
+        content.pack_start(box, True, True, 0)
+        content.show_all()
+
+        while True:
+            response = dialog.run()
+            if response != Gtk.ResponseType.OK:
+                break
+            text = buf.get_text(buf.get_start_iter(),
+                                buf.get_end_iter(), False)
+            hosts = [h.strip() for h in text.splitlines()
+                     if h.strip() and len(h.strip()) <= 253]
+            if not hosts:
+                continue
+            cfg['hosts'] = hosts
+            self.snimod.save_config(cfg)
+            self.snimod.write_hosts_file(hosts)
+            # если сервис активен — переписываем юнит и рестартуем
+            if self.snimod.is_service_active():
+                threading.Thread(target=self.snimod.write_unit,
+                                 daemon=True).start()
+                threading.Thread(target=self.snimod.stop, daemon=True).start()
+                import time as _t
+                threading.Thread(
+                    target=lambda: (_t.sleep(1.5),
+                                    self.snimod.start()),
+                    daemon=True).start()
             break
         dialog.destroy()
 
@@ -3886,13 +4198,22 @@ class AdvancedTrayIndicator:
                 continue
             exp = Gtk.Expander(label=GLib.markup_escape_text(header))
             exp.set_use_markup(True)
-            tv = Gtk.TextView()
-            tv.set_editable(False)
-            tv.set_wrap_mode(Gtk.WrapMode.WORD)
-            tv.get_buffer().set_text(body)
-            tv.set_left_margin(8); tv.set_right_margin(8)
-            tv.set_top_margin(4); tv.set_bottom_margin(4)
-            exp.add(tv)
+            # ⭐ v2.0 (user: «в подразделах лишнее место после текста —
+            # достаточно выделения пустой строкой сверху/снизу»):
+            # TextView имеет собственный минимум высоты (~3 строки) и
+            # расширяет секцию даже под однострочный текст. Вместо него —
+            # компактный Gtk.Label: высота ровно по тексту, сверху и
+            # снизу отступы 6px (аналог пустой строки), wrap включён.
+            lbl_body = Gtk.Label()
+            lbl_body.set_markup(GLib.markup_escape_text(body))
+            lbl_body.set_xalign(0)
+            lbl_body.set_line_wrap(True)
+            lbl_body.set_selectable(True)
+            lbl_body.set_margin_top(6)
+            lbl_body.set_margin_bottom(6)
+            lbl_body.set_margin_start(8)
+            lbl_body.set_margin_end(8)
+            exp.add(lbl_body)
             box.pack_start(exp, False, False, 0)
 
         scroll.add(box)

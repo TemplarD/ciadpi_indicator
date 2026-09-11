@@ -33,6 +33,7 @@ for f in \
     ciadpi_param_generator.py \
     ciadpi_whitelist.py \
     ciadpi_nfqws.py \
+    ciadpi_snimod.py \
     diagnose_ciadpi.py
 do
     if [ -f "$ROOT/$f" ]; then
@@ -45,6 +46,18 @@ done
 install -m755 "$ROOT/ciadpi_launcher.sh"  "$BUILD/usr/bin/ciadpi-indicator-launcher"
 install -m755 "$ROOT/ciadpi_privileges.sh" "$BUILD/usr/bin/ciadpi-privileges-setup"
 install -m755 "$ROOT/diagnose_ciadpi.py"   "$BUILD/usr/bin/ciadpi-diagnose-py" 2>/dev/null || true
+
+# ⭐ v2.0: snimod — движок №3 (SNI case-mod, C-демон).
+# Если бинарник не собран — собираем прямо здесь (нужен gcc+libnetfilter_queue-dev).
+if [ -x "$ROOT/snimod/bin/ciadpi_snimod" ]; then
+    install -m755 "$ROOT/snimod/bin/ciadpi_snimod" "$BUILD/usr/lib/$PKGNAME/ciadpi_snimod"
+else
+    if make -C "$ROOT/snimod" >/dev/null 2>&1; then
+        install -m755 "$ROOT/snimod/bin/ciadpi_snimod" "$BUILD/usr/lib/$PKGNAME/ciadpi_snimod"
+    else
+        echo "⚠️ snimod: бинарник не собран (нет dev-заголовков?) — движок №3 в пакете будет недоступен"
+    fi
+fi
 
 # Лаунчер в пакете должен запускать модули из /usr/lib
 cat > "$BUILD/usr/bin/ciadpi-indicator" <<'EOF'

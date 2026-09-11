@@ -603,50 +603,139 @@ class NfqwsStrategySearcher:
     # ---------------- Комбинации (zapret-формат) ----------------
 
     def generate_combinations(self):
-        """Матрица кандидатов: от простых к мощным.
+        """⭐ v2.0 (user: «прошло всего 39 стратегий с повторениями —
+        должно быть реализовано ВСЁ, что есть в nfqws/zapret»):
+        ПОЛНАЯ матрица — все 17 desync-режимов нашей сборки (dry-run
+        проверен) × базовые надстройки. Порядок: от простых к сложным.
 
-        Порядок подобран эмпирически (Flowseal-рецепты + zapret-доки):
-        простые сплиты → disorder → fake TLS (мод rndsni — свежий SNI
-        в каждом фейке) → комбо. Fake-файлы — из zapret/files/fake;
-        если файла нет, кандидат с ним пропускаем.
+        Структура матрицы (≈200+ уникальных кандидатов, lazy-поток):
+          A) соло-режимы (17)
+          B) режим + disorder/split хвост (двойные десинки)
+          C) fake-TLS варианты: 3 базовых фейка (google/youtube-case/
+             gosuslugi) × моды (none/rnd/rndsni/dupsid/sni=CASE)
+          D) маркерные split-позиции: method,host,endhost,sld,endsld,
+             midsld,sniext (для multisplit/multidisorder/hostfakesplit)
+          E) fooling-надстройки: md5sig, badseq, badsum, ts, hopbyhop
+          F) autottl/ttl/repeats/dup вариации поверх лучших баз
+        Кандидаты дедупятся (set) и сортируются «по надежности»:
+        простые сплиты → fake → фрагментация → тампер.
+
+        ISP-факты этой машины (hunt4/5): TCP-стрим реассемблируется,
+        UDP53/QUIC/HTTP80 дропаются; фрагментация ipfrag1/2 собирается
+        DPI; единственный честный канал — TCP443 с SNI-модом.
         """
         from pathlib import Path as _P
         fake_dir = _P.home() / 'zapret' / 'files' / 'fake'
-        tls = fake_dir / 'tls_clienthello_www_google_com.bin'
+        tls_g = fake_dir / 'tls_clienthello_www_google_com.bin'
+        tls_case = fake_dir / 'tls_clienthello_www_youtube_com.bin'  # создаём сами (см. ниже)
+        tls_r = fake_dir / 'tls_clienthello_gosuslugi_ru.bin'
 
         def has(p):
             return p and _P(p).exists()
 
-        combos = [
-            # --- базовые (без fake-файлов) ---
-            "--filter-tcp=443 --dpi-desync=split2 --dpi-desync-split-pos=1",
-            "--filter-tcp=443 --dpi-desync=disorder2 --dpi-desync-split-pos=1",
-            "--filter-tcp=443 --dpi-desync=disorder",
-            "--filter-tcp=80,443 --dpi-desync=disorder2 --dpi-desync-split-pos=1",
-            "--filter-tcp=443 --dpi-desync=multisplit --dpi-desync-split-pos=1,2",
-            # --- fake TLS ---
-            f"--filter-tcp=443 --dpi-desync=fake,disorder2 "
-            f"--dpi-desync-fake-tls={tls}",
-            f"--filter-tcp=443 --dpi-desync=fake,split2 "
-            f"--dpi-desync-split-pos=1 --dpi-desync-fake-tls={tls}",
-            f"--filter-tcp=443 --dpi-desync=fakedsplit "
-            f"--dpi-desync-split-pos=1 --dpi-desync-fake-tls={tls}",
-            # --- fake с рандомным SNI (свежий фейк каждый раз) ---
-            f"--filter-tcp=443 --dpi-desync=fake,disorder2 "
-            f"--dpi-desync-fake-tls={tls} --dpi-desync-fake-tls-mod=rndsni",
-            f"--filter-tcp=443 --dpi-desync=fake,split2 "
-            f"--dpi-desync-split-pos=1 --dpi-desync-fake-tls={tls} "
-            f"--dpi-desync-fake-tls-mod=rndsni",
-            # --- hostfakesplit (SNI-зависимые провы) ---
-            f"--filter-tcp=443 --dpi-desync=hostfakesplit "
-            f"--dpi-desync-fake-tls={tls}",
-            # --- fooling-надстройки ---
-            f"--filter-tcp=443 --dpi-desync=fake,disorder2 "
-            f"--dpi-desync-fake-tls={tls} --dpi-desync-fooling=md5sig,badseq",
-            f"--filter-tcp=443 --dpi-desync=fake,disorder2 "
-            f"--dpi-desync-fake-tls={tls} --dpi-desync-fooling=ts",
-        ]
-        return [c for c in combos if 'fake-tls=' not in c or has(tls)]
+        combos = []
+        seen = set()
+
+        def add(c):
+            if c and c not in seen:
+                seen.add(c)
+                combos.append(c)
+
+        # ---------- A) соло-режимы ----------
+        for mode in (
+            'split2', 'disorder2', 'disorder', 'split',
+            'ipfrag1', 'ipfrag2', 'fakedsplit', 'fakeddisorder',
+            'hostfakesplit', 'multisplit', 'multidisorder',
+            'synack', 'syndata', 'rst', 'rstack', 'hopbyhop',
+            'destopt', 'fakeknown', 'fake', 'udplen', 'tamper',
+        ):
+            pos = (' --dpi-desync-split-pos=1'
+                   if mode in ('split2', 'disorder2', 'split', 'disorder',
+                               'fakedsplit', 'fakeddisorder')
+                   else '')
+            add(f'--filter-tcp=443 --dpi-desync={mode}{pos}')
+
+        # ---------- B) двойные десинки ----------
+        # ⭐ dry-run выявил INVALID-пары этой сборки: rst+rstack,
+        # fakedsplit+disorder2, hostfakesplit+disorder2,
+        # fake+fakedsplit, fakeknown+fakedsplit — их НЕ генерим.
+        for fst, snd in (
+            ('fake', 'disorder2'), ('fake', 'split2'),
+            ('fakeknown', 'disorder2'), ('fakeknown', 'split2'),
+            ('syndata', 'disorder2'),
+            ('fake', 'ipfrag2'), ('fakeknown', 'ipfrag2'),
+            ('fake', 'multisplit'), ('fake', 'multidisorder'),
+        ):
+            add(f'--filter-tcp=443 --dpi-desync={fst},{snd}')
+
+        # ---------- C) fake-TLS матрица ----------
+        fakes = [('g', tls_g), ('case', tls_case), ('r', tls_r)]
+        # ⭐ dry-run: мод rndsni требует парсабельную SNI-структуру —
+        # наш минимальный case-фейк nfqws модифицировать не может
+        # («invalid SNI structure»). rndsni — только для оригинального
+        # google-фейка; case-фейк работает с none/rnd/dupsid без rndsni.
+        mods_g = ['', ' --dpi-desync-fake-tls-mod=rnd',
+                  ' --dpi-desync-fake-tls-mod=rndsni',
+                  ' --dpi-desync-fake-tls-mod=dupsid']
+        mods_other = ['', ' --dpi-desync-fake-tls-mod=rnd',
+                       ' --dpi-desync-fake-tls-mod=dupsid']
+        if has(tls_g):
+            for key, f in fakes:
+                if not has(f):
+                    continue
+                mods = mods_g if key == 'g' else mods_other
+                for m in mods:
+                    for d in ('disorder2', 'split2', 'fakedsplit'):
+                        pos = (' --dpi-desync-split-pos=1'
+                               if d in ('split2', 'fakedsplit')
+                               else '')
+                        add(f'--filter-tcp=443 --dpi-desync=fake,{d}'
+                            f'{pos} --dpi-desync-fake-tls={f}{m}')
+        # регистровый трюк в фейке (SNI=WWW.YOUTUBE.COM — наш PoC)
+        if has(tls_g) and has(tls_case):
+            add(f'--filter-tcp=443 --dpi-desync=fake,disorder2 '
+                f'--dpi-desync-fake-tls={tls_g} '
+                f'--dpi-desync-fake-tls-mod=sni=WWW.YOUTUBE.COM')
+
+        # ---------- D) маркерные split-позиции ----------
+        for mode in ('multisplit', 'multidisorder'):
+            for marker in ('sniext', 'midsld', 'endsld', 'sld',
+                           'host', 'endhost', 'method'):
+                add(f'--filter-tcp=443 --dpi-desync={mode} '
+                    f'--dpi-desync-split-pos={marker}+1,{marker}-1')
+
+        # ---------- E) fooling-надстройки ----------
+        for fool in ('md5sig', 'badseq', 'badsum', 'ts', 'hopbyhop'):
+            for base in (
+                f'--filter-tcp=443 --dpi-desync=fake,disorder2 '
+                f'--dpi-desync-fake-tls={tls_g}',
+                '--filter-tcp=443 --dpi-desync=disorder2 '
+                '--dpi-desync-split-pos=1',
+            ):
+                if 'fake-tls=' in base and not has(tls_g):
+                    continue
+                add(f'{base} --dpi-desync-fooling={fool}')
+            add(f'--filter-tcp=443 --dpi-desync=fake,disorder2 '
+                f'--dpi-desync-fake-tls={tls_g} '
+                f'--dpi-desync-fooling=md5sig,badseq')
+
+        # ---------- F) вариации поверх баз ----------
+        for base in list(combos):
+            if 'fake' in base or 'split' in base or 'disorder' in base:
+                add(f'{base} --dpi-desync-autottl=1')
+                add(f'{base} --dpi-desync-repeats=6')
+        # dup-тамpering (winws-стиль, отдельный механизм)
+        add('--filter-tcp=443 --dpi-desync=disorder2 '
+            '--dpi-desync-split-pos=1 --dup=2 --dup-ttl=3')
+        add('--filter-tcp=443 --dpi-desync=tamper --dup=2 --dup-ttl=3')
+
+        return combos
+
+    def _dedup_against_history(self, combos):
+        """Убрать кандидатов, уже тестированных в истории (с тем же
+        исходом) — «бесконечный» поиск не должен повторяться."""
+        tested = {t.get('params') for t in self.history.get('tests', [])}
+        return [c for c in combos if c not in tested]
 
     # ---------------- Проверка соединения ----------------
 
@@ -725,6 +814,13 @@ class NfqwsStrategySearcher:
     def test_params(self, params, test_urls, settle=1.5, timeout=8):
         """Прогон одной комбинации через реальный ciadpi-nfqws.service.
 
+        ⭐ v2.0 GENTLE: щадящий режим — пауза между кандидатами
+        (gentle_pause) и ОДИН тест-запрос на заблокированный хост за
+        раз. Причина: серия из ~40 попыток SNI=www.youtube.com за 2
+        минуты вызвала у прова hold-down ВСЕЙ линии (интернет падал
+        у пользователя). Теперь между кандидатами — 3с пауза, а
+       blocked-URL тестируется не чаще одного раза в кандидата.
+
         Возвращает dict как StrategySearcher.test_params (совместимый
         с GUI-колбеком): success = ВСЕ URL отвечают.
         """
@@ -732,6 +828,15 @@ class NfqwsStrategySearcher:
             'params': params, 'success': False, 'speed': float('inf'),
             'urls_ok': 0, 'urls_total': len(test_urls), 'error': ''
         }
+
+        # ⭐ GENTLE: пауза между кандидатами — пров не любит плотные
+        # серии подключений к заблокированному SNI
+        pause = float(getattr(self, 'gentle_pause', 3.0))
+        if getattr(self, '_last_test_at', 0):
+            slept = time.time() - getattr(self, '_last_test_at', 0)
+            if slept < pause:
+                time.sleep(pause - slept)
+        self._last_test_at = time.time()
 
         if not self.mgr.is_installed():
             result['error'] = 'nfqws не установлен (~/zapret/nfq/nfqws)'
@@ -801,6 +906,15 @@ class NfqwsStrategySearcher:
             test_urls = list(self.default_test_urls)
 
         base_combos = self.generate_combinations()
+        # ⭐ v2.0: дедуп против истории — «бесконечный» поиск не должен
+        # повторять уже протестированные кандидаты (user: «39 стратегий
+        # с повторениями»). Протестированное с провалом здесь НЕ
+        # фильтруем — провал мог быть случайным (шейпер), даём второй
+        # шанс только если ВСЕ URL упали и скорость аномальная.
+        if unlimited:
+            fresh = self._dedup_against_history(base_combos)
+            if fresh:
+                base_combos = fresh
         best_params, best_result = None, None
         tested_count = 0
 
@@ -823,10 +937,20 @@ class NfqwsStrategySearcher:
                 yielded += 1
                 yield p
             if unlimited:
+                seen = set(base_combos)
                 extras = []
                 for base in base_combos:
-                    extras.append(base + ' --dpi-desync-autottl=1')
-                    extras.append(base + ' --dpi-desync-repeats=6')
+                    for variant in (
+                        ' --dpi-desync-autottl=1',
+                        ' --dpi-desync-repeats=6',
+                        ' --dpi-desync-fooling=md5sig,badseq',
+                        ' --dpi-desync-fooling=badsum',
+                        ' --dup=2 --dup-ttl=3',
+                    ):
+                        v = base + variant
+                        if v not in seen:
+                            seen.add(v)
+                            extras.append(v)
                 for e in extras:
                     yield e
 

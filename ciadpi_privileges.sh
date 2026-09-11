@@ -51,6 +51,15 @@ ${TARGET_USER} ALL=(root) NOPASSWD: ${NFT_BIN} -f /home/${TARGET_USER}/.config/c
 ${TARGET_USER} ALL=(root) NOPASSWD: ${NFT_BIN} delete table inet ciadpi
 ${TARGET_USER} ALL=(root) NOPASSWD: ${NFT_BIN} list ruleset
 EOF
+
+# --- 1b) sudoers: snimod-движок №3 (SNI case-mod; qnum 210, таблица
+#     ciadpi_snimod отдельная от ciadpi и zapret) ---
+cat >> "$SUDOERS_FILE" <<EOF
+${TARGET_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_BIN} start ciadpi-snimod.service, ${SYSTEMCTL_BIN} stop ciadpi-snimod.service, ${SYSTEMCTL_BIN} restart ciadpi-snimod.service, ${SYSTEMCTL_BIN} status ciadpi-snimod.service, ${SYSTEMCTL_BIN} show ciadpi-snimod.service, ${SYSTEMCTL_BIN} is-active ciadpi-snimod.service, ${SYSTEMCTL_BIN} enable ciadpi-snimod.service, ${SYSTEMCTL_BIN} disable ciadpi-snimod.service
+${TARGET_USER} ALL=(root) NOPASSWD: /usr/bin/tee /etc/systemd/system/ciadpi-snimod.service
+${TARGET_USER} ALL=(root) NOPASSWD: ${NFT_BIN} -f /home/${TARGET_USER}/.config/ciadpi/ciadpi_snimod.nft
+${TARGET_USER} ALL=(root) NOPASSWD: ${NFT_BIN} delete table inet ciadpi_snimod
+EOF
 fi
 
 # Дублируем для старого пути /bin/systemctl (старые дистрибутивы)

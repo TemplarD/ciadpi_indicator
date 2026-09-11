@@ -267,6 +267,8 @@ main() {
         "ciadpi_autosearch.py"
         "ciadpi_param_generator.py"
         "ciadpi_whitelist.py"
+        "ciadpi_nfqws.py"
+        "ciadpi_snimod.py"
         "ciadpi_launcher.sh"
         "diagnose_ciadpi.py"
         "ciadpi_privileges.sh"

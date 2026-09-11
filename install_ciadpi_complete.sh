@@ -375,6 +375,7 @@ install_python_scripts() {
         [ -f "ciadpi_params_spec.py" ] && cp "ciadpi_params_spec.py" "$HOME/.local/bin/"  # Конструктор параметров
         [ -f "ciadpi_texts.py" ] && cp "ciadpi_texts.py" "$HOME/.local/bin/"        # Тексты справки/о программе
         [ -f "ciadpi_nfqws.py" ] && cp "ciadpi_nfqws.py" "$HOME/.local/bin/"          # nfqws-движок (zapret)
+        [ -f "ciadpi_snimod.py" ] && cp "ciadpi_snimod.py" "$HOME/.local/bin/"        # snimod — движок №3 (SNI case-mod)
         
     else
         # УДАЛЕННАЯ установка - скачиваем с GitHub
@@ -396,6 +397,7 @@ install_python_scripts() {
         wget -q -O "$HOME/.local/bin/ciadpi_params_spec.py" "$BASE_URL/ciadpi_params_spec.py" 2>/dev/null || warn "Params spec module not available"
         wget -q -O "$HOME/.local/bin/ciadpi_texts.py" "$BASE_URL/ciadpi_texts.py" 2>/dev/null || warn "Help/About texts module not available"
         wget -q -O "$HOME/.local/bin/ciadpi_nfqws.py" "$BASE_URL/ciadpi_nfqws.py" 2>/dev/null || warn "nfqws engine module not available"
+        wget -q -O "$HOME/.local/bin/ciadpi_snimod.py" "$BASE_URL/ciadpi_snimod.py" 2>/dev/null || warn "snimod engine module not available"
     fi
     
     log "Python scripts installed to ~/.local/bin/"
