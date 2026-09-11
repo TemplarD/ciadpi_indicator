@@ -1354,44 +1354,61 @@ class AdvancedTrayIndicator:
         return menu
 
     def update_status(self):
+        """⭐ v2.0.4: тикер НИКОГДА не блокирует GTK.
+
+        Раньше каждые 3с в главном потоке выполнялись ДВА subprocess-
+        вызова (systemctl is-active + systemctl show) — во время
+        переключения движков systemctl занят job-lock'ом, вызовы висели
+        по 2-6 секунд и ВЕСЬ интерфейс трея морозился («трей не
+        выключается», «окно виснет»). Теперь: фоновый поток собирает
+        статус, idle_add применяет только GTK-обновления. Повторный
+        тик во время сбора — пропуск (флаг _status_busy).
+        """
+        if getattr(self, '_status_busy', False):
+            return True
+        self._status_busy = True
+
+        def worker():
+            try:
+                engine = self._active_engine()
+                engine_units = {'nfqws': 'ciadpi-nfqws.service',
+                                'snimod': 'ciadpi-snimod.service'}
+                unit = engine_units.get(engine, 'ciadpi.service')
+                try:
+                    r = subprocess.run(
+                        ['systemctl', 'is-active', unit],
+                        capture_output=True, text=True, timeout=3)
+                    status = (r.stdout or '').strip() or 'unknown'
+                except Exception:
+                    status = 'unknown'
+                GLib.idle_add(self._apply_status_ui, engine, status)
+            finally:
+                self._status_busy = False
+
+        threading.Thread(target=worker, daemon=True).start()
+        return True
+
+    def _apply_status_ui(self, engine, status):
+        """GTK-часть обновления статуса (только главный поток,
+        только быстрые операции — ни одного subprocess)."""
         try:
-            # ⭐ Статус — АКТИВНОГО движка: nfqws/snimod → свой юнит,
-            # иначе классический ciadpi.service (byedpi)
-            engine = self._active_engine()
-            engine_units = {'nfqws': 'ciadpi-nfqws.service',
-                            'snimod': 'ciadpi-snimod.service'}
-            unit = engine_units.get(engine, 'ciadpi.service')
-            result = subprocess.run(
-                ['systemctl', 'is-active', unit],
-                capture_output=True, text=True, timeout=2
-            )
-            status = result.stdout.strip()
-
-            current_params = self.get_current_service_params()
-            if engine == 'nfqws':
-                status_text = (t('status.running_nfqws') if status == 'active'
-                               else t('status.stopped'))
-            elif engine == 'snimod':
-                status_text = ('SNI case-mod: работает' if status == 'active'
-                               else t('status.stopped'))
-            else:
-                status_text = t('status.running') if status == 'active' else t('status.stopped')
-
-            # Метку статуса обновляем ВСЕГДА (и в AppIndicator-режиме,
-            # и в fallback Gtk.StatusIcon, и без индикатора вовсе) —
-            # раньше без индикатора меню зависало с «Проверка статуса...»
             if status == 'active':
-                status_label = (t('status.running_s_nfqws') if engine == 'nfqws'
-                                else ('SNI case-mod: активен' if engine == 'snimod'
-                                      else t('status.running_s')))
+                status_text = (t('status.running_nfqws') if engine == 'nfqws'
+                               else ('SNI case-mod: работает'
+                                     if engine == 'snimod'
+                                     else t('status.running')))
+                status_label = (
+                    t('status.running_s_nfqws') if engine == 'nfqws'
+                    else ('SNI case-mod: активен' if engine == 'snimod'
+                          else t('status.running_s')))
             else:
+                status_text = t('status.stopped')
                 status_label = t('status.stopped_s')
 
             if hasattr(self, 'status_item') and self.status_item:
                 self.status_item.set_label(status_label)
 
-            # ⭐ v2.0: синк пункта «Движки обхода…» — текст показывает
-            # текущий выбранный движок (меню пересобирается редко).
+            # синк пункта «Движки обхода…» (текст = выбранный движок)
             item = getattr(self, '_engines_item', None)
             names = getattr(self, '_engine_names_map', None) or {}
             if item is not None:
@@ -1404,26 +1421,28 @@ class AdvancedTrayIndicator:
 
             if hasattr(self, 'indicator') and self.indicator:
                 if status == 'active':
-                    self.indicator.set_icon_full("network-transmit-receive-symbolic", t('status.running_s'))
+                    self.indicator.set_icon_full(
+                        "network-transmit-receive-symbolic",
+                        t('status.running_s'))
                 else:
-                    self.indicator.set_icon_full("network-offline-symbolic", t('status.stopped_s'))
-
-                # Обновляем подсказку
+                    self.indicator.set_icon_full(
+                        "network-offline-symbolic", t('status.stopped_s'))
                 self.update_tooltip()
-            elif hasattr(self, 'status_icon'):
-                # Для Gtk.StatusIcon
+            elif hasattr(self, 'status_icon') and self.status_icon:
                 if status == 'active':
-                    self.status_icon.set_from_icon_name("network-transmit-receive-symbolic")
-                    self.status_icon.set_tooltip_text(t('status.running_s'))
+                    self.status_icon.set_from_icon_name(
+                        "network-transmit-receive-symbolic")
                 else:
-                    self.status_icon.set_from_icon_name("network-offline-symbolic")
-                    self.status_icon.set_tooltip_text(t('status.stopped_s'))
+                    self.status_icon.set_from_icon_name(
+                        "network-offline-symbolic")
+                self.status_icon.set_tooltip_text(
+                    t('status.running_s') if status == 'active'
+                    else t('status.stopped_s'))
 
-        except Exception as e:
+        except Exception:
             if hasattr(self, 'status_item') and self.status_item:
                 self.status_item.set_label(t('status.error'))
-            
-        return True
+        return False  # одноразовый idle
     
     def sync_proxy_settings(self):
         """Синхронизация настроек прокси с системой"""
@@ -2827,11 +2846,27 @@ class AdvancedTrayIndicator:
         Правило сохранено (v1.9.1): выбор движка НЕ запускает сервис
         — свич показывает ВЫБОР; отдельные кнопки «Запустить/Остановить»
         поднимают выбранный движок прямо из окна.
+
+        ⭐ v2.0.4 (user: «открывает повторные окна, первое виснет»):
+        ОДНО окно на приложение. Повторный клик по пункту меню —
+        фокусирует существующее окно, а не плодит новое (каждое окно
+        таскало свой тикер, они конфликтовали и вешали друг друга).
         """
+        # ⭐ уже открыто? — поднимаем существующее наверх
+        existing = getattr(self, '_engines_window', None)
+        if existing is not None:
+            try:
+                existing.present()
+                return
+            except Exception:
+                # окно умерло (destroy) — создаём заново
+                self._engines_window = None
+
         active = self._active_engine()
 
         dialog = Gtk.Dialog(title='Движки обхода DPI', flags=0)
         dialog.set_default_size(460, 340)
+        self._engines_window = dialog
         content = dialog.get_content_area()
         content.set_margin_top(10); content.set_margin_bottom(10)
         content.set_margin_start(12); content.set_margin_end(12)
@@ -2954,22 +2989,28 @@ class AdvancedTrayIndicator:
             switches[name] = sw
 
         def refresh_status():
+            # ⭐ v2.0.4: НЕ трогаем свичи, пока воркер переключения
+            # занят (иначе тикер откатывал свичи назад на полпути —
+            # «переключается сам»); systemctl — в фон, GTK-морозов нет.
+            if getattr(self, '_engine_switching', False):
+                return True
             eng = self._active_engine()
-            # ⭐ v2.0.2: тикер держит свичи честными (если воркер
-            # переключения завершился — UI отразит реальность)
             ui_sync_switches(eng)
             unit = {'byedpi': 'ciadpi.service',
                     'nfqws': 'ciadpi-nfqws.service',
                     'snimod': 'ciadpi-snimod.service'}.get(eng)
-            try:
-                r = subprocess.run(
-                    ['systemctl', 'is-active', unit],
-                    capture_output=True, text=True, timeout=3)
-                st = (r.stdout or '').strip() or 'unknown'
-            except Exception:
-                st = 'unknown'
-            status_lbl.set_markup(
-                f'<small>Выбран: <b>{eng}</b> · сервис: {st}</small>')
+
+            def query():
+                try:
+                    r = subprocess.run(
+                        ['systemctl', 'is-active', unit],
+                        capture_output=True, text=True, timeout=3)
+                    st = (r.stdout or '').strip() or 'unknown'
+                except Exception:
+                    st = 'unknown'
+                GLib.idle_add(status_lbl.set_markup,
+                              f'<small>Выбран: <b>{eng}</b> · сервис: {st}</small>')
+            threading.Thread(target=query, daemon=True).start()
             return True
         refresh_status()
 
@@ -2981,14 +3022,33 @@ class AdvancedTrayIndicator:
         btn_close = Gtk.Button(label='Закрыть')
 
         def on_start_clicked(btn):
-            eng = self._active_engine()
+            # ⭐ v2.0.4: блокируем кнопки на время операции — повторные
+            # клики плодили ПАРАЛЛЕЛЬНЫЕ start-воркеры, которые дрались
+            # за systemctl и «включали разное».
+            if getattr(self, '_engine_switching', False):
+                return
+            btn_start.set_sensitive(False)
+            btn_stop.set_sensitive(False)
             self.start_service(None)
-            GLib.timeout_add_seconds(2, refresh_status)
+
+            def reenable():
+                btn_start.set_sensitive(True)
+                btn_stop.set_sensitive(True)
+                return False
+            GLib.timeout_add_seconds(4, reenable)
 
         def on_stop_clicked(btn):
-            eng = self._active_engine()
+            if getattr(self, '_engine_switching', False):
+                return
+            btn_start.set_sensitive(False)
+            btn_stop.set_sensitive(False)
             self.stop_service(None)
-            GLib.timeout_add_seconds(2, refresh_status)
+
+            def reenable():
+                btn_start.set_sensitive(True)
+                btn_stop.set_sensitive(True)
+                return False
+            GLib.timeout_add_seconds(4, reenable)
 
         btn_start.connect('clicked', on_start_clicked)
         btn_stop.connect('clicked', on_stop_clicked)
@@ -3006,6 +3066,14 @@ class AdvancedTrayIndicator:
         content.show_all()
         # тикер статуса, пока окно открыто
         timer = GLib.timeout_add_seconds(3, refresh_status)
+
+        def on_dialog_destroy(d):
+            # ⭐ v2.0.4: чистим ссылку, чтобы следующий клик по пункту
+            # меню открыл СВЕЖЕЕ окно (а не present() на труп)
+            self._engines_window = None
+            return False
+        dialog.connect('destroy', on_dialog_destroy)
+
         dialog.run()
         GLib.source_remove(timer)
         dialog.destroy()
