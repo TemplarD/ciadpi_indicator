@@ -343,27 +343,32 @@ class AdvancedTrayIndicator:
                         return None  # не смогли прочитать — не трогаем
 
                 engine = self.current_params.get('engine', 'byedpi')
-                want = 'ciadpi-nfqws.service' if engine == 'nfqws' \
-                    else 'ciadpi.service'
-                other = 'ciadpi.service' if engine == 'nfqws' \
-                    else 'ciadpi-nfqws.service'
+                want = {'byedpi': 'ciadpi.service',
+                        'nfqws': 'ciadpi-nfqws.service',
+                        'snimod': 'ciadpi-snimod.service'}.get(
+                            engine, 'ciadpi.service')
+                others = [u for u in ('ciadpi.service',
+                                      'ciadpi-nfqws.service',
+                                      'ciadpi-snimod.service')
+                           if u != want]
 
                 have_want = read_enabled(want)
-                have_other = read_enabled(other)
-                if have_want is None and have_other is None:
+                have_others = {u: read_enabled(u) for u in others}
+                if have_want is None and all(v is None for v in have_others.values()):
                     return  # systemctl недоступен — молча выходим
 
                 changed = []
-                # сначала включаем нужный; другой отключаем только если
+                # сначала включаем нужный; чужие отключаем только если
                 # нужный точно включён (иначе ребут останется без обхода)
                 want_on = have_want
                 if have_want is False:
                     ok, err = self._unit_boot_ctl(want, True)
                     changed.append(('enable', want, ok, err))
                     want_on = ok
-                if have_other and want_on:
-                    ok, err = self._unit_boot_ctl(other, False)
-                    changed.append(('disable', other, ok, err))
+                for other, have_o in have_others.items():
+                    if have_o and want_on:
+                        ok, err = self._unit_boot_ctl(other, False)
+                        changed.append(('disable', other, ok, err))
 
                 for verb, unit, ok, err in changed:
                     print(f"{'✅' if ok else '⚠️'} boot-флаг: {verb} {unit}"
@@ -1350,25 +1355,24 @@ class AdvancedTrayIndicator:
 
     def update_status(self):
         try:
-            # ⭐ Статус — АКТИВНОГО движка: при включённом nfqws следим
-            # за ciadpi-nfqws.service, иначе за классическим ciadpi.service
-            engine = (self._active_engine() if NFQWS_AVAILABLE and self.nfqws
-                      else 'byedpi')
-            if engine == 'nfqws':
-                result = subprocess.run(
-                    ['systemctl', 'is-active', 'ciadpi-nfqws.service'],
-                    capture_output=True, text=True, timeout=2
-                )
-            else:
-                result = subprocess.run(
-                    ['systemctl', 'is-active', 'ciadpi.service'],
-                    capture_output=True, text=True, timeout=2
-                )
+            # ⭐ Статус — АКТИВНОГО движка: nfqws/snimod → свой юнит,
+            # иначе классический ciadpi.service (byedpi)
+            engine = self._active_engine()
+            engine_units = {'nfqws': 'ciadpi-nfqws.service',
+                            'snimod': 'ciadpi-snimod.service'}
+            unit = engine_units.get(engine, 'ciadpi.service')
+            result = subprocess.run(
+                ['systemctl', 'is-active', unit],
+                capture_output=True, text=True, timeout=2
+            )
             status = result.stdout.strip()
 
             current_params = self.get_current_service_params()
             if engine == 'nfqws':
                 status_text = (t('status.running_nfqws') if status == 'active'
+                               else t('status.stopped'))
+            elif engine == 'snimod':
+                status_text = ('SNI case-mod: работает' if status == 'active'
                                else t('status.stopped'))
             else:
                 status_text = t('status.running') if status == 'active' else t('status.stopped')
@@ -1378,7 +1382,8 @@ class AdvancedTrayIndicator:
             # раньше без индикатора меню зависало с «Проверка статуса...»
             if status == 'active':
                 status_label = (t('status.running_s_nfqws') if engine == 'nfqws'
-                                else t('status.running_s'))
+                                else ('SNI case-mod: активен' if engine == 'snimod'
+                                      else t('status.running_s')))
             else:
                 status_label = t('status.stopped_s')
 

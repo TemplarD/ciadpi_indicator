@@ -35,7 +35,19 @@ class SnimodManager:
     def __init__(self):
         self.home = Path.home()
         repo = Path(__file__).resolve().parent
-        self.snimod_bin = repo / 'snimod' / 'bin' / 'ciadpi_snimod'
+        # ⭐ v2.0.1: бинарник ищем по списку кандидатов — модуль может
+        # работать ИЗ РЕПО (~/ciadpi_indicator/), ИЗ УСТАНОВЛЕННОЙ копии
+        # (~/.local/bin/), где рядом лежит snimod/bin/, либо по
+        # классическому пути репо в домашней папке. Раньше путь был
+        # один (рядом с модулем) — из ~/.local/bin трей всегда писал
+        # «не собран», хотя бинарник давно построен в репо.
+        candidates = [
+            repo / 'snimod' / 'bin' / 'ciadpi_snimod',            # рядом с модулем
+            self.home / 'ciadpi_indicator' / 'snimod' / 'bin' / 'ciadpi_snimod',  # репо
+            self.home / '.local' / 'bin' / 'snimod' / 'bin' / 'ciadpi_snimod',    # синк-копия
+            Path('/usr/lib/ciadpi-indicator/ciadpi_snimod'),     # deb-пакет
+        ]
+        self.snimod_bin = next((p for p in candidates if p.exists()), candidates[0])
         self.config_dir = self.home / '.config' / 'ciadpi'
         self.snimod_config = self.config_dir / 'snimod.json'
         self.hosts_file = self.config_dir / 'snimod_hosts.txt'
