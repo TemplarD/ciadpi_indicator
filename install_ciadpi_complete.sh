@@ -424,8 +424,12 @@ X-GNOME-Autostart-enabled=true
 EOF
     
     # Autostart file
+    # ⭐ v1.9.2 (user: «при запуске системы запускается индикатор — убрать
+    # из автозапуска»): автозапуск НЕ ставим. Файл лежит в меню приложений
+    # для ручного запуска; включить автозапуск можно галочкой в настройках
+    # приложения трея.
     mkdir -p "$HOME/.config/autostart"
-    cp "$HOME/.local/share/applications/ciadpi-indicator.desktop" "$HOME/.config/autostart/"
+    rm -f "$HOME/.config/autostart/ciadpi-indicator.desktop"
     
     log "Desktop files installed"
 }

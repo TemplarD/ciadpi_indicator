@@ -334,6 +334,9 @@ EOF
     # Step 9: Setup autostart
     log_step "Step 9/12: Setting up autostart"
     
+    # ⭐ v1.9.2 (user): автозапуск индикатора НЕ ставим — только ярлык
+    # в меню приложений для ручного запуска. Включить автозапуск можно
+    # галочкой «Автозапуск индикатора» в настройках приложения трея.
     cat > "$HOME/.local/share/applications/ciadpi-indicator.desktop" << EOF
 [Desktop Entry]
 Version=1.0
@@ -345,11 +348,10 @@ Icon=network-transmit-receive
 Categories=Network;
 StartupNotify=false
 Terminal=false
-X-GNOME-Autostart-enabled=true
 EOF
     
-    cp "$HOME/.local/share/applications/ciadpi-indicator.desktop" "$HOME/.config/autostart/"
-    log_info "Autostart entries created for $DESKTOP_ENV"
+    rm -f "$HOME/.config/autostart/ciadpi-indicator.desktop"
+    log_info "Autostart REMOVED (v1.9.2: manual start only), app-menu entry created"
     
     # Step 10: Create configuration
     log_step "Step 10/12: Creating configuration files"

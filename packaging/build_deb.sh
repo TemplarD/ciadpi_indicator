@@ -59,6 +59,10 @@ chmod +x "$BUILD/usr/bin/ciadpi-indicator"
 sed -i 's|ciadpi_launcher.sh|ciadpi-indicator|g' "$BUILD/usr/bin/ciadpi-indicator-launcher" 2>/dev/null || true
 
 # ---------- Desktop ----------
+# ⭐ v1.9.2 (user): X-GNOME-Autostart-enabled убран — desktop-файл в
+# /usr/share/applications служит для РУЧНОГО запуска из меню приложений;
+# автозапуск не навязывается (кто хочет — включит галочку в настройках
+# приложения или скопирует файл в ~/.config/autostart сам).
 cat > "$BUILD/usr/share/applications/ciadpi-indicator.desktop" <<EOF
 [Desktop Entry]
 Version=1.0
@@ -70,7 +74,6 @@ Icon=network-transmit-receive
 Categories=Network;
 StartupNotify=false
 Terminal=false
-X-GNOME-Autostart-enabled=true
 EOF
 
 # ---------- Документация и лицензия ----------
@@ -165,11 +168,11 @@ UNIT
     SUDO_USER="$REAL_USER" bash /usr/bin/ciadpi-privileges-setup || \
         echo "postinst: предупреждение — настройка прав не удалась, запустите вручную."
 
-    # 4) Автозапуск индикатора пользователю
+    # 4) ⭐ v1.9.2 (user): индикатор в автозапуск НЕ ставим — запуск
+    # вручную из меню приложений (или галочка «Автозапуск индикатора»
+    # в настройках приложения добавит ~/.config/autostart сам).
     AUTO_DIR="/home/$REAL_USER/.config/autostart"
-    mkdir -p "$AUTO_DIR"
-    cp /usr/share/applications/ciadpi-indicator.desktop "$AUTO_DIR/"
-    chown -R "$REAL_USER:$REAL_USER" "/home/$REAL_USER/.config"
+    rm -f "$AUTO_DIR/ciadpi-indicator.desktop" 2>/dev/null || true
 
     echo "postinst: готово. Индикатор: меню приложений или 'ciadpi-indicator'."
 fi

@@ -905,6 +905,11 @@ if __name__ == '__main__':
             status = f"✅ {r['urls_ok']}/{r['urls_total']} за {r['speed']:.2f}s" if r['success'] \
                 else f"❌ {r.get('error', '')[:60]}"
             print(f"[{data['index']+1}] {status} | {data['params']}")
+            # ⭐ v1.9.2 (user): расшифровка по КАЖДОМУ URL — важно видеть,
+            # к кому именно подключение прошло, а не только счёт 2/3
+            for url, ok, code, sec in (r.get('details') or []):
+                mark = "✅" if ok else "❌"
+                print(f"      {mark} {url} → HTTP {code} ({sec}с)")
         elif stage == 'done':
             if data['best']:
                 print(f"\n🏆 Лучшие параметры: {data['best']}")

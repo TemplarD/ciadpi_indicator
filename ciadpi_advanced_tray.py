@@ -38,11 +38,18 @@ try:
 except ImportError:
     TEXTS_AVAILABLE = False
     HELP_TEXTS, ABOUT_TEXTS = {}, {}
+    HELP_SECTIONS = {}
 
+# ⭐ v1.9.2 (user: «справка вызывает ошибку»): в ciadpi_params_spec
+# HELP_SECTIONS — это ЗАГОЛОВКИ ГРУПП конструктора (builder.group_*),
+# а в ciadpi_texts — словарь секций справки {(lang): [(header, body)]}.
+# Прежний импорт без алиаса ЗАТИРАЛ словарь справки → show_help падал
+# с «Справка недоступна». Импортируем под другим именем.
 try:
     from ciadpi_params_spec import (CONTROLS, parse_params, get_value,
-                                     build_params, HELP_SECTIONS,
+                                     build_params,
                                      update_param_in_string)
+    from ciadpi_params_spec import HELP_SECTIONS as BUILDER_SECTIONS
     PARAMS_SPEC_AVAILABLE = True
 except ImportError:
     PARAMS_SPEC_AVAILABLE = False
@@ -54,7 +61,7 @@ except ImportError:
         return ''
     def update_param_in_string(params_str, opt, value, group=None):
         return str(params_str)
-    HELP_SECTIONS = {}
+    BUILDER_SECTIONS = {}
 
 try:
     from ciadpi_whitelist import WhitelistManager
@@ -1194,9 +1201,24 @@ class AdvancedTrayIndicator:
         if NFQWS_AVAILABLE and self.nfqws:
             active_engine = self._active_engine()
 
-            engine_check = Gtk.CheckMenuItem(label=t('engine.nfqws_on'))
+            # ⭐ v1.9.2 (user: «чейнджбокка нет, всё ещё просто пункт меню;
+            # может, переопределить стили, чтобы в списке были и графические
+            # элементы»): GNOME Shell перерисовывает DBusMenu-меню собственным
+            # стилем и галочку CheckMenuItem там может быть НЕ ВИДНО.
+            # Поэтому состояние дублируется глифом ☑/☐ прямо в тексте пункта —
+            # оно видно в ЛЮБОМ трее (AppIndicator, StatusIcon, XFCE…).
+            # CheckMenuItem оставлен: где DBusMenu поддержан нативно, там
+            # пункт остаётся кликаемым чекбоксом.
+            def _engine_check_label(is_on):
+                glyph = "☑" if is_on else "☐"
+                return f"{glyph} {t('engine.nfqws_on')}"
+
+            engine_check = Gtk.CheckMenuItem(label=_engine_check_label(
+                active_engine == 'nfqws'))
             engine_check.set_active(active_engine == 'nfqws')
             engine_check.set_tooltip_text(t('engine.switch_hint'))
+            # помечаем для синка: и галочка, и ГЛИФ в тексте
+            self._engine_check_label_fn = _engine_check_label
 
             def on_engine_toggled(widget):
                 # обрабатываем ТОЛЬКО клики пользователя: программный
@@ -1365,10 +1387,16 @@ class AdvancedTrayIndicator:
             # программный set_active тоже стреляет toggled — без флага
             # тикер «кликал» за пользователя и менял движок при каждом
             # изменении статуса сервиса (запуск/остановка = смена режима!).
+            # ⭐ v1.9.2: синкаем и ГЛИФ ☑/☐ в тексте пункта (в GNOME Shell
+            # галочка CheckMenuItem может не отрисоваться — текст виден
+            # всегда).
             chk = getattr(self, '_engine_check', None)
             if chk is not None:
                 want = engine == 'nfqws'
                 try:
+                    label_fn = getattr(self, '_engine_check_label_fn', None)
+                    if label_fn is not None:
+                        chk.set_label(label_fn(want))
                     if chk.get_active() != want:
                         self._engine_syncing = True
                         chk.set_active(want)
@@ -3256,6 +3284,14 @@ class AdvancedTrayIndicator:
             else:
                 err = (r.get('error') or '')[:120]
                 ui_log(f"[{idx}] ❌ {err} | {r['params']}")
+            # ⭐ v1.9.2 (user: «не видно, к КАКИМ адресам прошло, а к каким
+            # нет — важен именно список, а не просто 2/3»): расшифровка
+            # по каждому URL печатается при ЛЮБОМ исходе — успех, частичном
+            # доступе и провале. Раньше детали показывались только при
+            # полном успехе, из-за чего «2/3» было бесполезно.
+            for url, ok, code, sec in (r.get('details') or []):
+                mark = "✅" if ok else "❌"
+                ui_log(f"      {mark} {url} → HTTP {code} ({sec}с)")
 
         def on_progress(stage, data):
             """Колбэк из фонового потока — планируем обновление GUI."""
@@ -3286,13 +3322,9 @@ class AdvancedTrayIndicator:
                     frac = idx / float(state.get('planned_total', total_now) or total_now)
                     if r['success']:
                         ui_set_progress(frac, f"{t('search.test')} {idx}: {t('search.ok_urls')} ({r['urls_ok']}/{r['urls_total']} URL)")
-                        # ⭐ переменная называется sec, НЕ t: раньше цикл
-                        # `for ... t in details` затенял функцию перевода t()
-                        # и UnboundLocalError убивал КАЖДОЕ обновление GUI —
-                        # лог навсегда оставался с одной строкой
-                        for url, ok, code, sec in r.get('details', []):
-                            mark = "✅" if ok else "❌"
-                            ui_log(f"      {mark} {url} → HTTP {code} ({sec}с)")
+                        # ⭐ v1.9.2: расшифровка по URL теперь печатается
+                        # в _log_test_result при любом исходе (общая для
+                        # обеих веток update_test) — здесь дубль убран.
                     else:
                         ui_set_progress(frac, f"{t('search.test')} {idx}: {t('search.fail')}")
                     _log_test_result(r, idx)
@@ -3843,14 +3875,16 @@ class AdvancedTrayIndicator:
         for header, body in sections:
             if header is None:
                 # None-ключ = общий текст без сворачивания (интро)
+                # ⭐ v1.9.2: интро идёт через set_markup — экранируем
+                # <>&, иначе голый «&» в тексте роняет Pango (en-текст)
                 lbl = Gtk.Label()
-                lbl.set_markup(body)
+                lbl.set_markup(GLib.markup_escape_text(body))
                 lbl.set_xalign(0)
                 lbl.set_line_wrap(True)
                 lbl.set_selectable(True)
                 box.pack_start(lbl, False, False, 0)
                 continue
-            exp = Gtk.Expander(label=header)
+            exp = Gtk.Expander(label=GLib.markup_escape_text(header))
             exp.set_use_markup(True)
             tv = Gtk.TextView()
             tv.set_editable(False)
