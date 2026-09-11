@@ -48,6 +48,15 @@ class SnimodManager:
             Path('/usr/lib/ciadpi-indicator/ciadpi_snimod'),     # deb-пакет
         ]
         self.snimod_bin = next((p for p in candidates if p.exists()), candidates[0])
+        # ⭐ v2.0.2: DNS-мост DoT — ищем ciadpi_dotbridge.py так же, как бинарник
+        bridge_candidates = [
+            repo / 'ciadpi_dotbridge.py',
+            self.home / 'ciadpi_indicator' / 'ciadpi_dotbridge.py',
+            self.home / '.local' / 'bin' / 'ciadpi_dotbridge.py',
+            Path('/usr/lib/ciadpi-indicator/ciadpi_dotbridge.py'),
+        ]
+        self.dotbridge_py = next((p for p in bridge_candidates if p.exists()),
+                                 bridge_candidates[0])
         self.config_dir = self.home / '.config' / 'ciadpi'
         self.snimod_config = self.config_dir / 'snimod.json'
         self.hosts_file = self.config_dir / 'snimod_hosts.txt'
@@ -180,6 +189,104 @@ TimeoutStartSec=30
 WantedBy=multi-user.target
 """
 
+    # ⭐ v2.0.2: DNS-мост (DoT) — пров даёт NXDOMAIN на youtube в UDP53,
+    # но DoT (853) не блокирует (openssl-проверено). dotbridge слушает
+    # 127.0.0.1:53, форвардит на 1.1.1.1:853. Юниты: снапшот resolv.conf
+    # делается при старте, откат — при остановке (ExecStopPost).
+    DOTBRIDGE_UNIT = """\
+[Unit]
+Description=CIADPI DoT DNS bridge (127.0.0.1:53 -> 1.1.1.1:853)
+After=network.target
+Wants=network.target
+Before=ciadpi-snimod.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 {bridge}
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+"""
+    RESOLV_SNAPSHOT = '/etc/resolv.conf.ciadpi-snapshot'
+    RESOLV_BODY = (
+        '# ciadpi dotbridge: локальный DoT-резолвер (снапшот оригинала в '
+        '/etc/resolv.conf.ciadpi-snapshot)\nnameserver 127.0.0.1\n'
+    )
+
+    def _dns_bridge_enable(self):
+        """Пишет юнит dotbridge + переключает resolv.conf на 127.0.0.1."""
+        import subprocess as _sp
+        unit_path = Path('/etc/systemd/system/ciadpi-dotbridge.service')
+        content = self.DOTBRIDGE_UNIT.format(bridge=self.dotbridge_py)
+        ok_steps = []
+        # 1) юнит через sudo tee (покрыт sudoers? добавим в privileges)
+        try:
+            tmp = Path('/tmp/ciadpi_dotbridge.service')
+            tmp.write_text(content, encoding='utf-8')
+            with open(tmp, 'rb') as f_in:
+                r = _sp.run(['sudo', '-n', self.TEE_BIN, str(unit_path)],
+                            stdin=f_in, capture_output=True, timeout=30)
+            ok_steps.append(('unit', r.returncode == 0 and unit_path.stat().st_size > 0))
+        except Exception as e:
+            ok_steps.append(('unit', False))
+            print(f"⚠️ dotbridge unit: {e}")
+        # 2) снапшот resolv.conf (один раз)
+        try:
+            if not Path(self.RESOLV_SNAPSHOT).exists():
+                r = _sp.run(['sudo', '-n', 'cp', '/etc/resolv.conf',
+                             self.RESOLV_SNAPSHOT],
+                            capture_output=True, timeout=15)
+                ok_steps.append(('snapshot', r.returncode == 0))
+            else:
+                ok_steps.append(('snapshot', True))
+        except Exception as e:
+            ok_steps.append(('snapshot', False))
+            print(f"⚠️ resolv snapshot: {e}")
+        # 3) resolv.conf → 127.0.0.1
+        try:
+            tmp = Path('/tmp/ciadpi_resolv.body')
+            tmp.write_text(self.RESOLV_BODY, encoding='utf-8')
+            with open(tmp, 'rb') as f_in:
+                r = _sp.run(['sudo', '-n', self.TEE_BIN, '/etc/resolv.conf'],
+                            stdin=f_in, capture_output=True, timeout=15)
+            ok_steps.append(('resolv', r.returncode == 0))
+        except Exception as e:
+            ok_steps.append(('resolv', False))
+            print(f"⚠️ resolv switch: {e}")
+        # 4) старт моста
+        try:
+            r = _sp.run(['sudo', '-n', self.SYSTEMCTL_BIN, 'daemon-reload'],
+                        capture_output=True, timeout=30)
+            r = _sp.run(['sudo', '-n', self.SYSTEMCTL_BIN, 'enable', '--now',
+                         'ciadpi-dotbridge.service'],
+                        capture_output=True, timeout=30)
+            ok_steps.append(('start', r.returncode == 0))
+        except Exception as e:
+            ok_steps.append(('start', False))
+            print(f"⚠️ dotbridge start: {e}")
+        return all(ok for _, ok in ok_steps), ok_steps
+
+    def _dns_bridge_disable(self):
+        """Остановка моста и откат resolv.conf из снапшота."""
+        import subprocess as _sp
+        try:
+            _sp.run(['sudo', '-n', self.SYSTEMCTL_BIN, 'disable', '--now',
+                     'ciadpi-dotbridge.service'],
+                    capture_output=True, timeout=30)
+        except Exception:
+            pass
+        try:
+            if Path(self.RESOLV_SNAPSHOT).exists():
+                r = _sp.run(['sudo', '-n', 'cp', self.RESOLV_SNAPSHOT,
+                             '/etc/resolv.conf'],
+                            capture_output=True, timeout=15)
+                return r.returncode == 0
+        except Exception as e:
+            print(f"⚠️ resolv restore: {e}")
+        return False
+
     _PRIVILEGED_VERBS = {'start', 'stop', 'restart', 'reload',
                          'enable', 'disable', 'mask', 'unmask',
                          'daemon-reload'}
@@ -264,6 +371,15 @@ WantedBy=multi-user.target
         ok, err = self.write_unit()
         if not ok:
             return False, err
+        # ⭐ v2.0.2: DNS-мост поднимается вместе со snimod (DoT против
+        # NXDOMAIN-блокировки ютуб-доменов) — но если он не поднялся,
+        # движок всё равно стартует (SNI-мод независим).
+        try:
+            bridge_ok, steps = self._dns_bridge_enable()
+            if not bridge_ok:
+                print(f"⚠️ dotbridge не полностью: {steps}")
+        except Exception as e:
+            print(f"⚠️ dotbridge enable: {e}")
         ok, err = self._systemctl('start', self.SERVICE)
         if ok and self.is_service_active():
             return True, ''
@@ -271,6 +387,12 @@ WantedBy=multi-user.target
 
     def stop(self):
         ok, err = self._systemctl('stop', self.SERVICE)
+        # ⭐ v2.0.2: мост гасим вместе с движком (resolv.conf откатывается
+        # из снапшота) — интернет возвращается к исходному DNS.
+        try:
+            self._dns_bridge_disable()
+        except Exception as e:
+            print(f"⚠️ dotbridge disable: {e}")
         # страховка: правила могли остаться
         if not self.rules_active():
             self.remove_rules_fallback()

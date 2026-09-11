@@ -2366,7 +2366,7 @@ class AdvancedTrayIndicator:
                 else:
                     self.show_notification(t('notif.error'), err or "systemctl error", category='service')
                 time.sleep(1)
-                self.update_status()
+                GLib.idle_add(self.update_status)
             except Exception as e:
                 self.show_notification(t('notif.error'), str(e), category='service')
         
@@ -2391,8 +2391,8 @@ class AdvancedTrayIndicator:
                     self.show_notification(t('notif.error'),
                                            err or 'start failed',
                                            category='service')
-                self.update_status()
-                self.rebuild_menu()
+                GLib.idle_add(self.update_status)
+                GLib.idle_add(self.rebuild_menu)
             threading.Thread(target=start_nfqws, daemon=True).start()
             return
 
@@ -2410,8 +2410,8 @@ class AdvancedTrayIndicator:
                     self.show_notification(t('notif.error'),
                                            err or 'start failed',
                                            category='service')
-                self.update_status()
-                self.rebuild_menu()
+                GLib.idle_add(self.update_status)
+                GLib.idle_add(self.rebuild_menu)
             threading.Thread(target=start_snimod, daemon=True).start()
             return
 
@@ -2445,7 +2445,7 @@ class AdvancedTrayIndicator:
                         self.show_notification(t('notif.success'), t('notif.service_started'), category='service')
 
                     time.sleep(1)
-                    self.update_status()
+                    GLib.idle_add(self.update_status)
 
                 else:
                     self.show_notification(t('notif.error'),
@@ -2477,8 +2477,8 @@ class AdvancedTrayIndicator:
                     self.show_notification(t('notif.error'),
                                            err or 'stop failed',
                                            category='service')
-                self.update_status()
-                self.rebuild_menu()
+                GLib.idle_add(self.update_status)
+                GLib.idle_add(self.rebuild_menu)
             threading.Thread(target=stop_nfqws, daemon=True).start()
             return
 
@@ -2495,8 +2495,8 @@ class AdvancedTrayIndicator:
                     self.show_notification(t('notif.error'),
                                            err or 'stop failed',
                                            category='service')
-                self.update_status()
-                self.rebuild_menu()
+                GLib.idle_add(self.update_status)
+                GLib.idle_add(self.rebuild_menu)
             threading.Thread(target=stop_snimod, daemon=True).start()
             return
 
@@ -2525,7 +2525,7 @@ class AdvancedTrayIndicator:
                                                category='service')
                     
                     time.sleep(1)
-                    self.update_status()
+                    GLib.idle_add(self.update_status)
                     
                 except Exception as e:
                     self.show_notification(t('notif.error'), str(e), category='service')
@@ -2550,7 +2550,7 @@ class AdvancedTrayIndicator:
                     self.show_notification(t('notif.error'),
                                            (err2 or err or 'restart failed'),
                                            category='service')
-                self.update_status()
+                GLib.idle_add(self.update_status)
             threading.Thread(target=restart_nfqws, daemon=True).start()
             return
         # ⭐ v2.0: snimod-движок (SNI case-mod)
@@ -2567,7 +2567,7 @@ class AdvancedTrayIndicator:
                     self.show_notification(t('notif.error'),
                                            (err2 or err or 'restart failed'),
                                            category='service')
-                self.update_status()
+                GLib.idle_add(self.update_status)
             threading.Thread(target=restart_snimod, daemon=True).start()
             return
         self.run_command("systemctl restart ciadpi.service")
@@ -2707,8 +2707,8 @@ class AdvancedTrayIndicator:
                     t('engine.selected').format(
                         name=engine_names.get(engine, engine)),
                     category='service')
-                self.update_status()
-                self.rebuild_menu()
+                GLib.idle_add(self.update_status)
+                GLib.idle_add(self.rebuild_menu)
             finally:
                 self._engine_switching = False
 
@@ -2856,16 +2856,41 @@ class AdvancedTrayIndicator:
 
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         switches = {}
+        # status_lbl нужен ПЕРВЫМ: set_engine (guard-ветка) пишет в него
+        status_lbl = Gtk.Label()
+        status_lbl.set_xalign(0)
+
+        # ⭐ v2.0.2 (user: «при остановке одного запускает байдпи сам,
+        # выбрать второй не получается»): движки — ВЗАИМОИСКЛЮЧАЮЩИЕ.
+        # Свичи работают как радиогруппа: включить один = выключить
+        # остальные. ВЫКЛЮЧЕНИЕ свича больше НЕ выбирает молча byedpi —
+        # оно просто возвращает свич (кликнул мимо = вернул как было).
+        # Guard: если воркер переключения ещё занят — не молчим, а
+        # показываем состояние и откатываем свич визуально.
+
+        def ui_sync_switches(selected):
+            """Синх свичей под guard (без вызова state-set-логики)."""
+            self._engine_syncing = True
+            try:
+                for k, sw in switches.items():
+                    sw.set_active(k == selected)
+            finally:
+                self._engine_syncing = False
 
         def set_engine(name):
-            """Выбор движка (без автозапуска) + мгновенный синк свичей."""
-            if name != self._active_engine():
-                GLib.idle_add(self.switch_engine, None, name)
-            # локальный синк свичей (реальный переключит worker)
-            for k, sw in switches.items():
-                self._engine_syncing = True
-                sw.set_active(k == name)
-                self._engine_syncing = False
+            """Выбор движка: мгновенный UI-синк + фоновый воркер."""
+            current = self._active_engine()
+            if name == current:
+                ui_sync_switches(name)
+                return
+            if getattr(self, '_engine_switching', False):
+                # воркер занят — честно возвращаем свич и не молчим
+                ui_sync_switches(current)
+                status_lbl.set_markup(
+                    '<small>⏳ Переключение ещё идёт — секундочку…</small>')
+                return
+            ui_sync_switches(name)          # оптимистично: кружочек поехал
+            GLib.idle_add(self.switch_engine, None, name)
 
         for name, title, desc in engines:
             row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
@@ -2904,11 +2929,15 @@ class AdvancedTrayIndicator:
             def on_switch(widget_sw, state, name=name):
                 if getattr(self, '_engine_syncing', False):
                     return
-                # свич показывает выбор; снятие = переход на byedpi
+                # ⭐ v2.0.2: движение свича = выбор движка. ВЫКЛЮЧЕНИЕ
+                # свича НЕ переключает на byedpi молча — свич просто
+                # возвращается (радиогруппа: один из трёх всегда активен).
                 if state:
                     set_engine(name)
-                elif name != 'byedpi':
-                    set_engine('byedpi')
+                    return True   # блокируем авто-выключение; синк сделает set_engine
+                # выключение: вернуть свич как был
+                GLib.idle_add(ui_sync_switches, self._active_engine())
+                return True      # отменить визуальное выключение
             sw.connect('state-set', on_switch)
 
             def on_row_click(row_ev, ev, name=name):
@@ -2924,12 +2953,11 @@ class AdvancedTrayIndicator:
             box.pack_start(row, False, False, 4)
             switches[name] = sw
 
-        # строка статуса выбранного сервиса
-        status_lbl = Gtk.Label()
-        status_lbl.set_xalign(0)
-
         def refresh_status():
             eng = self._active_engine()
+            # ⭐ v2.0.2: тикер держит свичи честными (если воркер
+            # переключения завершился — UI отразит реальность)
+            ui_sync_switches(eng)
             unit = {'byedpi': 'ciadpi.service',
                     'nfqws': 'ciadpi-nfqws.service',
                     'snimod': 'ciadpi-snimod.service'}.get(eng)

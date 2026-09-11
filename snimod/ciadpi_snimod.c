@@ -153,17 +153,34 @@ static int cb(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
                     if (find_sni(pl, plen, &sni, &sni_len)) {
                         for (int i = 0; i < g_nhosts; i++) {
                             int hl = (int)strlen(g_hosts[i]);
-                            if (hl != sni_len) continue;
-                            int match = 1;
-                            for (int j = 0; j < hl; j++) {
-                                unsigned char c = sni[j];
-                                if (c >= 'A' && c <= 'Z') c += 32;
-                                if (c != (unsigned char)g_hosts[i][j]) {
-                                    match = 0; break;
+                            int match = 0;
+                            if (hl == sni_len) {
+                                /* точное совпадение (регистр-независимо) */
+                                match = 1;
+                                for (int j = 0; j < hl; j++) {
+                                    unsigned char c = sni[j];
+                                    if (c >= 'A' && c <= 'Z') c += 32;
+                                    if (c != (unsigned char)g_hosts[i][j]) {
+                                        match = 0; break;
+                                    }
+                                }
+                            } else if (sni_len > hl + 1 &&
+                                       sni[sni_len - hl - 1] == '.') {
+                                /* ⭐ v2.0.2 suffix-матчинг: youtube CDN
+                                 * использует SNI вида rr1---sn-xguxaxjvh.googlevideo.com
+                                 * — точного совпадения с googlevideo.com нет.
+                                 * Матчим «*.host» по хвосту. */
+                                match = 1;
+                                for (int j = 0; j < hl; j++) {
+                                    unsigned char c = sni[sni_len - hl + j];
+                                    if (c >= 'A' && c <= 'Z') c += 32;
+                                    if (c != (unsigned char)g_hosts[i][j]) {
+                                        match = 0; break;
+                                    }
                                 }
                             }
                             if (!match) continue;
-                            /* поднимаем регистр SNI-строки */
+                            /* поднимаем регистр ВСЕЙ SNI-строки */
                             for (int j = 0; j < sni_len; j++) {
                                 unsigned char c = ((unsigned char *)sni)[j];
                                 if (c >= 'a' && c <= 'z')
@@ -201,6 +218,7 @@ static int load_hosts(const char *path) {
         /* храним lowercase */
         for (char *q = s; *q; q++)
             if (*q >= 'A' && *q <= 'Z') *q += 32;
+        if (strlen(s) > HOST_LEN) s[HOST_LEN] = 0;  /* уже проверено выше — на всякий случай */
         strncpy(g_hosts[g_nhosts], s, HOST_LEN);
         g_hosts[g_nhosts][HOST_LEN] = 0;
         g_nhosts++;

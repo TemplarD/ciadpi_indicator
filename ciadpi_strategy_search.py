@@ -877,9 +877,13 @@ class NfqwsStrategySearcher:
 
     def stop_search(self):
         self.stop_requested = True
-        # текущий тест короткий — просто дожидаемся его конца
+        # ⭐ v2.0.2: НЕ блокируем главный поток systemctl-ом (кнопка
+        # «Остановить» вешала весь GTK до минуты). Флаг остановит цикл
+        # между кандидатами; сервис погасит сам цикл в finally-ветке
+        # (или воркер ниже — в фоне).
+        import threading as _th
         try:
-            self.mgr.stop()
+            _th.Thread(target=self.mgr.stop, daemon=True).start()
         except Exception:
             pass
 
