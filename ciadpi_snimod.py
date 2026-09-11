@@ -132,6 +132,15 @@ table inet {table} {{
         type filter hook output priority filter; policy accept;
         meta l4proto tcp tcp dport 443 ct original packets 1-6 meta mark != {mark} counter queue num {qnum} bypass
     }}
+    # ⭐ v2.0.3: DNS-перехват для dotbridge — пров NXDOMAIN-ит ютуб в
+    # UDP53. ВСЕ исходящие DNS (кроме loopback) днатятся на локальный
+    # DoT-мост 127.0.0.1:53. resolv.conf трогать не нужно (он часто
+    # прибит immutable-флагом VPN-клиентами — Amnezia так делает).
+    # Цепочка живёт в НАШЕЙ таблице: сносится вместе со snimod.
+    chain dns_dnat {{
+        type nat hook output priority -100; policy accept;
+        ip daddr != 127.0.0.0/8 udp dport 53 counter dnat ip to 127.0.0.1:53
+    }}
 }}
 """
 
@@ -215,13 +224,48 @@ WantedBy=multi-user.target
         '/etc/resolv.conf.ciadpi-snapshot)\nnameserver 127.0.0.1\n'
     )
 
+    @staticmethod
+    def _resolv_immutable() -> bool:
+        """Флаг immutable на resolv.conf (ставит AmneziaVPN и VPN-клиенты)."""
+        import subprocess as _sp
+        try:
+            r = _sp.run(['lsattr', '/etc/resolv.conf'],
+                        capture_output=True, text=True, timeout=5)
+            return 'i' in (r.stdout or '')[:12]
+        except Exception:
+            return False
+
+    def _resolv_unimmutable(self):
+        import subprocess as _sp
+        try:
+            return _sp.run(['sudo', '-n', 'chattr', '-i', '/etc/resolv.conf'],
+                           capture_output=True, timeout=10).returncode == 0
+        except Exception:
+            return False
+
+    def _resolv_reimmutable(self):
+        import subprocess as _sp
+        try:
+            return _sp.run(['sudo', '-n', 'chattr', '+i', '/etc/resolv.conf'],
+                           capture_output=True, timeout=10).returncode == 0
+        except Exception:
+            return False
+
     def _dns_bridge_enable(self):
-        """Пишет юнит dotbridge + переключает resolv.conf на 127.0.0.1."""
+        """Пишет юнит dotbridge и запускает мост.
+
+        ⭐ v2.0.3: resolv.conf больше НЕ трогаем — DNS перехватывается
+        nft-цепочкой dns_dnat в нашей таблице (все исходящие udp/53,
+        кроме loopback, днатятся на 127.0.0.1:53). Это надёжнее:
+        resolv.conf часто прибит immutable (AmneziaVPN) и правится
+        только с chattr, а nft-цепочка живёт и умирает вместе со
+        snimod — никаких хвостов в системе.
+        """
         import subprocess as _sp
         unit_path = Path('/etc/systemd/system/ciadpi-dotbridge.service')
         content = self.DOTBRIDGE_UNIT.format(bridge=self.dotbridge_py)
         ok_steps = []
-        # 1) юнит через sudo tee (покрыт sudoers? добавим в privileges)
+        # 1) юнит через sudo tee (покрыт sudoers)
         try:
             tmp = Path('/tmp/ciadpi_dotbridge.service')
             tmp.write_text(content, encoding='utf-8')
@@ -232,30 +276,7 @@ WantedBy=multi-user.target
         except Exception as e:
             ok_steps.append(('unit', False))
             print(f"⚠️ dotbridge unit: {e}")
-        # 2) снапшот resolv.conf (один раз)
-        try:
-            if not Path(self.RESOLV_SNAPSHOT).exists():
-                r = _sp.run(['sudo', '-n', 'cp', '/etc/resolv.conf',
-                             self.RESOLV_SNAPSHOT],
-                            capture_output=True, timeout=15)
-                ok_steps.append(('snapshot', r.returncode == 0))
-            else:
-                ok_steps.append(('snapshot', True))
-        except Exception as e:
-            ok_steps.append(('snapshot', False))
-            print(f"⚠️ resolv snapshot: {e}")
-        # 3) resolv.conf → 127.0.0.1
-        try:
-            tmp = Path('/tmp/ciadpi_resolv.body')
-            tmp.write_text(self.RESOLV_BODY, encoding='utf-8')
-            with open(tmp, 'rb') as f_in:
-                r = _sp.run(['sudo', '-n', self.TEE_BIN, '/etc/resolv.conf'],
-                            stdin=f_in, capture_output=True, timeout=15)
-            ok_steps.append(('resolv', r.returncode == 0))
-        except Exception as e:
-            ok_steps.append(('resolv', False))
-            print(f"⚠️ resolv switch: {e}")
-        # 4) старт моста
+        # 2) старт моста
         try:
             r = _sp.run(['sudo', '-n', self.SYSTEMCTL_BIN, 'daemon-reload'],
                         capture_output=True, timeout=30)
@@ -269,23 +290,17 @@ WantedBy=multi-user.target
         return all(ok for _, ok in ok_steps), ok_steps
 
     def _dns_bridge_disable(self):
-        """Остановка моста и откат resolv.conf из снапшота."""
+        """Остановка моста (nft-цепочка dns_dnat снесётся вместе с таблицей
+        snimod в ExecStopPost — система вернётся к исходному DNS без хвостов)."""
         import subprocess as _sp
         try:
             _sp.run(['sudo', '-n', self.SYSTEMCTL_BIN, 'disable', '--now',
                      'ciadpi-dotbridge.service'],
                     capture_output=True, timeout=30)
-        except Exception:
-            pass
-        try:
-            if Path(self.RESOLV_SNAPSHOT).exists():
-                r = _sp.run(['sudo', '-n', 'cp', self.RESOLV_SNAPSHOT,
-                             '/etc/resolv.conf'],
-                            capture_output=True, timeout=15)
-                return r.returncode == 0
+            return True
         except Exception as e:
-            print(f"⚠️ resolv restore: {e}")
-        return False
+            print(f"⚠️ dotbridge disable: {e}")
+            return False
 
     _PRIVILEGED_VERBS = {'start', 'stop', 'restart', 'reload',
                          'enable', 'disable', 'mask', 'unmask',

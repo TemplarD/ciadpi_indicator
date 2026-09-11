@@ -42,6 +42,7 @@ EOF
 # ограничен этим файлом правил. NFT_BIN может отсутствовать на
 # системах без nftables — тогда блок пропускается.
 NFT_BIN="$(command -v nft || true)"
+CHATTR_BIN="$(command -v chattr || true)"
 RULES_HELPER="\$HOME/.config/ciadpi/ciadpi_nfqws_rules.sh"
 if [ -n "$NFT_BIN" ]; then
 cat >> "$SUDOERS_FILE" <<EOF
@@ -61,6 +62,8 @@ ${TARGET_USER} ALL=(root) NOPASSWD: ${NFT_BIN} -f /home/${TARGET_USER}/.config/c
 ${TARGET_USER} ALL=(root) NOPASSWD: ${NFT_BIN} delete table inet ciadpi_snimod
 ${TARGET_USER} ALL=(root) NOPASSWD: /usr/bin/tee /etc/systemd/system/ciadpi-dotbridge.service
 ${TARGET_USER} ALL=(root) NOPASSWD: /usr/bin/tee /etc/resolv.conf
+${TARGET_USER} ALL=(root) NOPASSWD: ${CHATTR_BIN} -i /etc/resolv.conf
+${TARGET_USER} ALL=(root) NOPASSWD: ${CHATTR_BIN} +i /etc/resolv.conf
 ${TARGET_USER} ALL=(root) NOPASSWD: /usr/bin/cp /etc/resolv.conf /etc/resolv.conf.ciadpi-snapshot
 ${TARGET_USER} ALL=(root) NOPASSWD: /usr/bin/cp /etc/resolv.conf.ciadpi-snapshot /etc/resolv.conf
 ${TARGET_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_BIN} start ciadpi-dotbridge.service, ${SYSTEMCTL_BIN} stop ciadpi-dotbridge.service, ${SYSTEMCTL_BIN} restart ciadpi-dotbridge.service, ${SYSTEMCTL_BIN} status ciadpi-dotbridge.service, ${SYSTEMCTL_BIN} is-active ciadpi-dotbridge.service, ${SYSTEMCTL_BIN} enable ciadpi-dotbridge.service, ${SYSTEMCTL_BIN} disable ciadpi-dotbridge.service
