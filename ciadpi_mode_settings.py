@@ -86,6 +86,11 @@ class ModeSettingsWindow:
         self.dialog = None
         self._pulse_timer = None
         self._search_state = {'running': False, 'searcher': None}
+        # хуки конструкторов (трей вешает при открытии)
+        self.param_builder_cb = None
+        self.nfqws_builder_cb = None
+        # vbox «последних» на вкладке Параметры (для живой перерисовки)
+        self._recent_vbox = None
 
     # ---------------- публичное API ----------------
 
@@ -305,6 +310,7 @@ class ModeSettingsWindow:
         recent_vbox.set_margin_start(6)
         recent_vbox.set_margin_end(6)
         recent_box_holder['box'] = recent_vbox
+        self._recent_vbox = recent_vbox    # ⭐ для живой перерисовки
         recent_frame.add(recent_vbox)
         box.pack_start(recent_frame, False, False, 4)
         self._fill_recent(recent_vbox, mode)
@@ -471,13 +477,13 @@ class ModeSettingsWindow:
             box.pack_start(info, True, True, 0)
             return box
         # byedpi/nfqws — строим из спецификации
+        # ⭐ ФИКС v2.0.9: хуки живут на ЭТОМ окне (self.param_builder_cb),
+        # а не на tray — раньше читали self.tray.param_builder_cb (его
+        # не существует) и конструктор всегда был «недоступен».
         try:
-            if mode == 'byedpi' and self.tray.param_builder_cb:
-                widget = self.tray.param_builder_cb()
-            elif mode == 'nfqws' and self.tray.nfqws_builder_cb:
-                widget = self.tray.nfqws_builder_cb()
-            else:
-                widget = None
+            cb = (self.param_builder_cb if mode == 'byedpi'
+                  else self.nfqws_builder_cb)
+            widget = cb() if cb else None
         except Exception as e:
             widget = None
             print(f'⚠️ builder for {mode}: {e}')
@@ -848,11 +854,13 @@ class ModeSettingsWindow:
             def done():
                 self._push_recent(mode, params)
                 self._refresh_params_entry(mode)
-                # перерисовать «последние» на вкладке
+                # ⭐ ФИКС v2.0.9 («последние не появились»): список
+                # «Последние использованные» теперь ПЕРЕРИСОВЫВАЕТСЯ
+                # сразу после применения — раньше рисовался только
+                # при открытии окна.
                 try:
-                    page = self.notebook.get_nth_page(0)
-                    for w in page.get_children():
-                        pass
+                    if self._recent_vbox is not None:
+                        self._fill_recent(self._recent_vbox, mode)
                 except Exception:
                     pass
                 self.tray.show_notification(

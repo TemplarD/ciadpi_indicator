@@ -133,11 +133,19 @@ class NfqwsManager:
 # ⭐ ct original packets (НЕ ct bytes!) — счётчик пакетов исходного
 #   направления соединения: перехватываем только первые пакеты, где
 #   ClientHello. Синтаксис сверен с zapret/common/nft.sh.
+# ⭐ v2.0.9: set whitelist_ips — белый список (bypass_dpi): IP из
+#   него НЕ заворачивается в очередь (движок их не трогает).
 table inet {table} {{
+    set whitelist_ips {{
+        type ipv4_addr
+        flags interval
+        elements = {{ {wl_ips} }}
+    }}
     chain output {{
         type filter hook output priority filter; policy accept;
         # TCP 80,443: только первые пакеты соединения, без собственных
-        # пакетов nfqws (fwmark) — иначе цикл
+        # пакетов nfqws (fwmark) — иначе цикл. Белый список — мимо.
+        ip daddr @whitelist_ips counter return
         meta l4proto tcp tcp dport {{ 80, 443 }} ct original packets 1-6 meta mark != {mark} counter queue num {qnum} bypass
 {udp_rules}
     }}
@@ -151,6 +159,51 @@ table inet {table} {{
     _NFT_UDP_TEMPLATE = """\
         # UDP {ports}: десинк-профили nfqws (DNS-фейк, QUIC-фейк, udplen…)
         meta l4proto udp udp dport {{ {ports} }} meta mark != {mark} counter queue num {qnum} bypass"""
+
+    def _collect_whitelist_ips(self):
+        """⭐ v2.0.9: IP для nft set whitelist_ips из whitelist.json.
+
+        bypass_dpi=False или пустой список → '0.0.0.0/32' (пустышка,
+        set обязан иметь хотя бы один элемент — иначе nft -f упадёт).
+        Домены резолвим через сокет (быстро, без внешних утилит);
+        недорезолвившиеся молча пропускаем.
+        """
+        try:
+            import socket
+            import json as _json
+            wlp = self.config_dir / 'whitelist.json'
+            if not wlp.exists():
+                return '0.0.0.0/32'
+            wl = _json.loads(wlp.read_text(encoding='utf-8'))
+            if not wl.get('bypass_dpi'):
+                return '0.0.0.0/32'
+            out = []
+            for ip_range in wl.get('ips') or []:
+                out.append(str(ip_range).strip())
+            for domain in wl.get('domains') or []:
+                domain = str(domain).strip().lower()
+                if not domain or domain.startswith('*') or \
+                        domain == 'localhost' or \
+                        domain.replace('.', '').isdigit():
+                    continue
+                try:
+                    infos = socket.getaddrinfo(domain, None,
+                                               proto=socket.IPPROTO_TCP)
+                    for info in infos:
+                        ip = info[4][0]
+                        if ':' not in ip:      # только v4
+                            out.append(ip)
+                except Exception:
+                    continue
+            # уникализировать
+            seen = []
+            for x in out:
+                if x and x not in seen:
+                    seen.append(x)
+            return ', '.join(seen) if seen else '0.0.0.0/32'
+        except Exception as e:
+            print(f'⚠️ whitelist ips: {e}')
+            return '0.0.0.0/32'
 
     @staticmethod
     def _extract_udp_ports(params):
@@ -197,11 +250,17 @@ table inet {table} {{
                 for _ in [0])  # одна общая ветка на все порты
         else:
             udp_rules = ''
+        # ⭐ v2.0.9: белый список (bypass_dpi) — IP whitelist.json
+        # попадают в nft set и НЕ заворачиваются в очередь. Домены
+        # резолвятся системным DNS при применении правил; IP-диапазоны
+        # идут как есть. Пустой список → 0.0.0.0/32 (не матчит ничего).
+        wl_ips = self._collect_whitelist_ips()
         self.nft_file.write_text(
             self._NFT_RULESET.format(table=self.NFT_TABLE,
                                      qnum=self.QNUM,
                                      mark=self.DESYNC_MARK,
-                                     udp_rules=udp_rules),
+                                     udp_rules=udp_rules,
+                                     wl_ips=wl_ips),
             encoding='utf-8')
 
         helper = f"""#!/bin/bash

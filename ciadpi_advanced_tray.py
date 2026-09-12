@@ -1032,7 +1032,16 @@ class AdvancedTrayIndicator:
             
             bypass_dpi_check = Gtk.CheckButton(label=t('wl.bypass_dpi'))
             bypass_dpi_check.set_active(self.whitelist.get("bypass_dpi", False))
-            bypass_dpi_check.set_sensitive(False)  # Пока не реализовано
+            # ⭐ v2.0.9: РАБОТАЕТ (раньше «Пока не реализовано»):
+            # nfqws — IP белого списка попадают в nft set и НЕ
+            # заворачиваются в очередь; snimod и так правит только свои
+            # хосты (белый список не нужен); byedpi — см. «исключать из
+            # прокси». Изменение применяется при следующем запуске nfqws.
+            bypass_dpi_check.set_tooltip_text(
+                'nfqws: IP этих адресов/доменов не проходят через десинк\n'
+                '(применяется при следующем запуске nfqws).\n'
+                'snimod правит только свои хосты — этот флаг на него\n'
+                'не влияет.')
             
             exceptions_box.pack_start(bypass_proxy_check, False, False, 0)
             exceptions_box.pack_start(bypass_dpi_check, False, False, 0)
@@ -2907,12 +2916,17 @@ class AdvancedTrayIndicator:
                 state['selected'] = name
                 ui_set_status(f'Выбран режим: <b>{name}</b> '
                               '(запуск — кнопкой ниже)')
-                # ⭐ ФИКС («выбор не сохраняется»): пишем В КОФИГ ВСЕГДА
-                # (включая bridge — чтобы главное меню старотовало
-                # выбранный режим, а не «просто первый»). Если bridge
-                # выбран как режим — он остаётся самостоятельным, но
-                # конфиг помнит выбор; движковый флаг engine при этом
-                # не трогаем (у моста свой юнит).
+                # ⭐ ФИКС v2.0.9 (user: «при смене режима окно параметров
+                # от старого режима остаётся — закрыть, чтобы открыли
+                # уже правильное»): гасим окно «Настройки режима», оно
+                # строится под режим при открытии.
+                try:
+                    ms = getattr(self, '_mode_settings_window', None)
+                    if ms is not None and ms.dialog is not None:
+                        ms.dialog.destroy()
+                except Exception:
+                    pass
+                # выбор сразу в конфиг (без автозапуска — прежнее правило)
                 if name == 'bridge':
                     self.current_params['bridge_mode'] = True
                 else:
@@ -4490,8 +4504,11 @@ class AdvancedTrayIndicator:
         scroll.add(box)
         content_area.pack_start(scroll, True, True, 0)
         content_area.show_all()
-        dialog.run()
-        dialog.destroy()
+        # ⭐ v2.0.9: справка НЕМОДАЛЬНАЯ (dialog.run() блокировал
+        # все окна приложения — user: «осталась модальность у справки»)
+        dialog.show_all()
+        dialog.connect('delete-event',
+                       lambda d, e: (d.destroy(), True)[1])
 
     def show_about(self, widget):
         """Окно «О программе» (на языке интерфейса)"""
