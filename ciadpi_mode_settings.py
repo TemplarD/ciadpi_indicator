@@ -170,6 +170,41 @@ class ModeSettingsWindow:
 
         # вкладки
         self.notebook = Gtk.Notebook()
+        # ⭐ v2.0.8 (user: «фон вкладок выделить, область вкладок
+        # чуть цветом — чтобы было понятно, что там вкладки»):
+        # подсветка активного таба + лёгкий фон области страниц.
+        try:
+            css = b'''
+            notebook header {
+                background-color: rgba(120, 120, 140, 0.18);
+                border-bottom: 1px solid rgba(120, 120, 140, 0.45);
+                padding: 4px;
+            }
+            notebook header tab {
+                padding: 6px 14px;
+                border-radius: 6px 6px 0 0;
+            }
+            notebook header tab:checked {
+                background-color: rgba(255, 255, 255, 0.22);
+                font-weight: bold;
+            }
+            notebook > stack {
+                background-color: rgba(255, 255, 255, 0.06);
+            }
+            '''
+            prov = Gtk.CssProvider()
+            prov.load_from_data(css)
+            ctx = self.notebook.get_style_context()
+            ctx.add_provider(prov, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+            # и на экран, где окна
+            screen = dlg.get_screen() if hasattr(dlg, 'get_screen') \
+                else None
+            if screen is not None:
+                Gtk.StyleContext.add_provider_for_screen(
+                    screen, prov,
+                    Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        except Exception as e:
+            print(f'⚠️ notebook css: {e}')
         content.pack_start(self.notebook, True, True, 4)
 
         self.notebook.append_page(self._page_params(mode),
@@ -373,8 +408,62 @@ class ModeSettingsWindow:
         """Конструктор параметров под режим."""
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         if mode == 'bridge':
-            info = Gtk.Label(label='У DNS-моста нет конструируемых параметров.')
-            box.pack_start(info, True, True, 0)
+            # ⭐ v2.0.8 (user: «для мостов какую-то настройку в
+            # конструкторе»): upstream DoT-резолвер и TTL кэша.
+            frame = Gtk.Frame(
+                label='Настройки DNS-моста (upstream DoT-резолвер)')
+            fbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL,
+                           spacing=6)
+            fbox.set_margin_top(6)
+            fbox.set_margin_bottom(6)
+            fbox.set_margin_start(8)
+            fbox.set_margin_end(8)
+
+            cur = self._bridge_cfg()
+
+            row1 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
+                           spacing=6)
+            lbl1 = Gtk.Label(label='Upstream IP:')
+            lbl1.set_xalign(0)
+            self.bridge_upstream = Gtk.Entry()
+            self.bridge_upstream.set_text(cur.get('upstream', '1.1.1.1'))
+            self.bridge_upstream.set_tooltip_text(
+                'DNS-over-TLS сервер: 1.1.1.1 (Cloudflare), '
+                '8.8.8.8 (Google), 9.9.9.9 (Quad9)')
+            self.bridge_upstream.set_hexpand(True)
+            row1.pack_start(lbl1, False, False, 0)
+            row1.pack_start(self.bridge_upstream, True, True, 0)
+            fbox.pack_start(row1, False, False, 2)
+
+            row2 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
+                           spacing=6)
+            lbl2 = Gtk.Label(label='Имя TLS-сертификата:')
+            lbl2.set_xalign(0)
+            self.bridge_tlsname = Gtk.Entry()
+            self.bridge_tlsname.set_text(cur.get('tls_name',
+                                                 'cloudflare-dns.com'))
+            self.bridge_tlsname.set_tooltip_text(
+                'server_hostname для проверки сертификата upstream')
+            self.bridge_tlsname.set_hexpand(True)
+            row2.pack_start(lbl2, False, False, 0)
+            row2.pack_start(self.bridge_tlsname, True, True, 0)
+            fbox.pack_start(row2, False, False, 2)
+
+            btn = Gtk.Button(label='Сохранить и перезапустить мост')
+            btn.connect('clicked', self._on_bridge_cfg_apply)
+            fbox.pack_start(btn, False, False, 2)
+
+            hint = Gtk.Label()
+            hint.set_markup(
+                '<small>Upstream общается по TLS (порт 853) — пров '
+                'не может подменить ответы, только заблокировать.\n'
+                'Если мост не стартует с вашим upstream — попробуйте '
+                '8.8.8.8/dns.google или 9.9.9.9/dns.quad9.</small>')
+            hint.set_xalign(0)
+            hint.set_line_wrap(True)
+            fbox.pack_start(hint, False, False, 4)
+            frame.add(fbox)
+            box.pack_start(frame, False, False, 4)
             return box
         if mode == 'snimod':
             info = Gtk.Label(label='Параметры snimod — это список хостов '
@@ -406,6 +495,82 @@ class ModeSettingsWindow:
             scroll.add(widget)
             box.pack_start(scroll, True, True, 0)
         return box
+
+    # ---------------- конфиг DNS-моста (конструктор) ----------------
+
+    def _bridge_cfg_path(self):
+        return Path.home() / '.config' / 'ciadpi' / 'dotbridge.json'
+
+    def _bridge_cfg(self):
+        try:
+            return json.loads(
+                self._bridge_cfg_path().read_text(encoding='utf-8'))
+        except Exception:
+            return {'upstream': '1.1.1.1', 'tls_name': 'cloudflare-dns.com'}
+
+    def _on_bridge_cfg_apply(self, btn):
+        import re as _re
+        upstream = (self.bridge_upstream.get_text() or '').strip()
+        tls_name = (self.bridge_tlsname.get_text() or '').strip()
+        if not _re.fullmatch(r'(\d{1,3}\.){3}\d{1,3}', upstream or ''):
+            self.tray.show_notification(
+                'Мост', 'Upstream должен быть IPv4-адресом (напр. 1.1.1.1)')
+            return
+        if not tls_name:
+            tls_name = 'cloudflare-dns.com'
+        cfg = {'upstream': upstream, 'tls_name': tls_name}
+        try:
+            self._bridge_cfg_path().write_text(
+                json.dumps(cfg, indent=2), encoding='utf-8')
+        except Exception as e:
+            self.tray.show_notification('Ошибка', str(e)[:120])
+            return
+
+        import threading
+
+        def worker():
+            try:
+                import ciadpi_enginectl as ec
+                # переписываем юнит с новыми аргументами и рестартуем
+                unit = Path('/etc/systemd/system/ciadpi-dotbridge.service')
+                bridge_py = Path.home() / '.local/bin/ciadpi_dotbridge.py'
+                if not bridge_py.exists():
+                    bridge_py = (Path(__file__).resolve().parent
+                                 / 'ciadpi_dotbridge.py')
+                content = (
+                    '[Unit]\n'
+                    'Description=CIADPI DoT DNS bridge '
+                    '(127.0.0.1:53 -> upstream:853)\n'
+                    'After=network.target\n'
+                    'Wants=network.target\n\n'
+                    '[Service]\n'
+                    'Type=simple\n'
+                    f'ExecStart=/usr/bin/python3 {bridge_py} '
+                    f'--upstream {upstream} --tls-name {tls_name}\n'
+                    'Restart=on-failure\n'
+                    'RestartSec=3\n\n'
+                    '[Install]\n'
+                    'WantedBy=multi-user.target\n')
+                import subprocess as _sp
+                tmp = Path('/tmp/ciadpi_dotbridge.service')
+                tmp.write_text(content, encoding='utf-8')
+                with open(tmp, 'rb') as f_in:
+                    _sp.run(['sudo', '-n', '/usr/bin/tee', str(unit)],
+                            stdin=f_in, capture_output=True, timeout=30)
+                _sp.run(['sudo', '-n', '/usr/bin/systemctl',
+                         'daemon-reload'], capture_output=True, timeout=30)
+                if ec.is_active('bridge'):
+                    ec.stop_bridge()
+                ok, msg = ec.start_bridge()
+            except Exception as e:
+                ok, msg = False, str(e)
+            def done():
+                self.tray.show_notification(
+                    'Мост' if ok else 'Ошибка',
+                    (msg or f'upstream → {upstream}')[:150])
+                return False
+            GLib.idle_add(done)
+        threading.Thread(target=worker, daemon=True).start()
 
     # ---------------- вкладка «Поиск стратегии» ----------------
 

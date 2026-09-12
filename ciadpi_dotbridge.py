@@ -23,10 +23,12 @@ import sys
 import threading
 import time
 import struct
+from pathlib import Path
 
 CACHE = {}          # (wire-bytes-hash) -> (answer, expiry)
 CACHE_LOCK = threading.Lock()
 UPSTREAM = ('1.1.1.1', 853)
+TLS_NAME = 'cloudflare-dns.com'
 DEBUG = False
 STATS = {'queries': 0, 'dot_ok': 0, 'dot_fail': 0, 'cache_hit': 0}
 
@@ -37,11 +39,16 @@ def log(msg):
 
 
 def dot_query(wire: bytes, timeout=6.0) -> bytes | None:
-    """Запрос по DNS-over-TLS (RFC 7858): 2-байтный length-prefix."""
+    """Запрос по DNS-over-TLS (RFC 7858): 2-байтный length-prefix.
+
+    ⭐ v2.0.8: server_hostname настраивается (--tls-name / конфиг) —
+    мост умеет работать с любым DoT-провайдером: 1.1.1.1/
+    cloudflare-dns.com, 8.8.8.8/dns.google, 9.9.9.9/dns.quad9.
+    """
     try:
         raw = socket.create_connection(UPSTREAM, timeout=timeout)
         ctx = ssl.create_default_context()
-        with ctx.wrap_socket(raw, server_hostname='cloudflare-dns.com') as tls:
+        with ctx.wrap_socket(raw, server_hostname=TLS_NAME) as tls:
             tls.sendall(struct.pack('>H', len(wire)) + wire)
             hdr = b''
             while len(hdr) < 2:
@@ -133,19 +140,37 @@ class ThreadingTCPServer(socketserver.ThreadingTCPServer):
 
 
 def main():
-    global UPSTREAM, DEBUG
+    global UPSTREAM, TLS_NAME, DEBUG
     ap = argparse.ArgumentParser()
     ap.add_argument('--upstream', default='1.1.1.1')
+    ap.add_argument('--tls-name', default=None,
+                    help='server_hostname TLS (по умолчанию '
+                         'cloudflare-dns.com; для 8.8.8.8 — dns.google, '
+                         'для 9.9.9.9 — dns.quad9)')
     ap.add_argument('--port', type=int, default=53)
     ap.add_argument('--debug', action='store_true')
     args = ap.parse_args()
     UPSTREAM = (args.upstream, 853)
+    # ⭐ v2.0.8: конфиг dotbridge.json имеет приоритет для tls-name,
+    # если флаг не задан явно (конструктор окна настроек пишет его)
+    if args.tls_name:
+        TLS_NAME = args.tls_name
+    else:
+        try:
+            import json as _json
+            cfgp = Path.home() / '.config' / 'ciadpi' / 'dotbridge.json'
+            cfg = _json.loads(cfgp.read_text(encoding='utf-8'))
+            TLS_NAME = cfg.get('tls_name') or TLS_NAME
+            if cfg.get('upstream') and args.upstream == '1.1.1.1':
+                UPSTREAM = (cfg['upstream'], 853)
+        except Exception:
+            pass
     DEBUG = args.debug
 
     udp = ThreadingUDPServer(('127.0.0.1', args.port), UDPHandler)
     tcp = ThreadingTCPServer(('127.0.0.1', args.port), TCPHandler)
     print(f"[dotbridge] DNS-мост 127.0.0.1:{args.port} → "
-          f"{args.upstream}:853 (DoT) запущен", flush=True)
+          f"{UPSTREAM[0]}:853 (DoT, tls={TLS_NAME}) запущен", flush=True)
     threading.Thread(target=tcp.serve_forever, daemon=True).start()
     try:
         udp.serve_forever()

@@ -18,9 +18,31 @@ HELP_TEXTS = {
     • Резервное копирование и восстановление настроек GNOME
     • Поддержка белого списка доменов
 
+    🎛️ НАСТРОЙКИ РЕЖИМА (v2.0.7+):
+
+    Один пункт меню «🎛 Настройки режима…» — окно с тремя вкладками,
+    содержимое строится под ВЫБРАННЫЙ режим:
+
+    • «Параметры» — ручная строка ввода + дефолт + примеры +
+      4 ПОСЛЕДНИХ использованных (свои для каждого режима,
+      автообновление). Для snimod — редактор списка хостов.
+    • «Конструктор» — компактные регуляторы ключевых флагов
+      (byedpi: -T/-A/-s/-r; nfqws: desync/-split-pos/ttl; мост:
+      upstream DoT-резолвер + TLS-имя). Правки сразу идут в строку.
+    • «Поиск стратегии» — перебор параметров под выбранный режим;
+      найденное — кнопкой «→ в строку параметров».
+
+    🗂 ПРОФИЛИ (v2.0.6+):
+
+    «Профили…» — снимки настроек для разных сетей: выбранный режим,
+    параметры всех движков, состояние DNS-моста, настройки прокси.
+    «Сохранить текущее как…» — снимок; «Применить» — поднимает
+    сохранённое целиком (гасит лишнее, стартует нужное). Для
+    переключения Дом/Кофейня/Работа на ноутбуке.
+
     ⚡ Оптимизация параметров:
     • Конструктор с подробными подсказками «?» по каждому параметру
-    • Поиск стратегии перебором (меню «Поиск стратегии»)
+    • Поиск стратегии перебором (вкладка «Поиск стратегии»)
     • Готовые проверенные примеры конфигураций
     • История тестирования
 
@@ -41,19 +63,34 @@ HELP_TEXTS = {
     Комбинации не кончаются: после известного набора и истории
     генератор выдаёт новые волны (60/120/180…), без повторов.
 
-    🐟 ДВА ДВИЖКА ОБХОДА (v1.7+):
+    🎛️ ЧЕТЫРЕ РЕЖИМА ОБХОДА (v2.0.8):
 
-    Меню «Движок обхода» — галочка «Движок nfqws» ПРЯМО в главном
-    меню (один клик, без подменю):
+    «⚙ Режимы обхода…» — окно с radio-строками, выбор кликом по всей
+    строке, кнопки ▶ Запустить / ⏹ Остановить / ↻ Перезапустить
+    действуют на ВЫБРАННЫЙ режим. Повторный запуск активного —
+    no-op (не рестарт). Запуск одного режима гасит остальные.
 
-    • галочка СНЯТА — byedpi: SOCKS5-прокси на 127.0.0.1. Обходится
-      только трафик, явно направленный в прокси (системный/ручной
-      режим). Приложения нужно настраивать на прокси.
+    • byedpi — SOCKS5-прокси 127.0.0.1. Обходится только трафик,
+      явно направленный в прокси. Параметры — «🎛 Настройки режима».
 
-    • галочка СТОИТ — nfqws: перехват пакетов через NFQUEUE: правила
-      nftables заворачивают первые пакеты ВСЕХ исходящих TCP-соединений
-      (порты 80/443) в очередь, nfqws искажает их (desync). НИКАКОЙ
-      настройки приложений не нужно — работает для всей машины.
+    • nfqws — десинки zapret через NFQUEUE: искажает пакеты ВСЕХ
+      приложений (порты 80/443), настройка приложений не нужна.
+      Самый мощный против SNI/IP-фильтров прова.
+
+    • snimod — наш движок №3: поднимает РЕГИСТР SNI (www.youtube.com
+      → WWW.YOUTUBE.COM). Пров режет по подстроке в нижнем регистре,
+      серверу регистр безразличен (RFC 6066). Хосты — «Настройки
+      режима» → «Параметры».
+
+    • DNS-мост — локальный DoT-резолвер 127.0.0.1:53 → upstream:853
+      (по умолчанию 1.1.1.1; сменить — «Настройки режима» →
+      «Конструктор»). Чинит NXDOMAIN-подмену DNS прова. Работает
+      сам по себе и вместе с любым движком.
+
+    ⭐ Выбор режима сохраняется и НЕ зависит от того, запущен ли
+    сервис. Главное меню «Запустить/Остановить» управляет именно
+    выбранным режимом (включая мост). Смена режима не запускает
+    его автоматически — стартуйте кнопкой или «Запустить».
 
     ⭐ Выбор движка НЕ зависит от того, запущен ли сервис: остановленный
     nfqws остаётся выбранным nfqws — меню, «Запустить/Остановить»
@@ -220,19 +257,27 @@ HELP_TEXTS = {
     Combinations never run out: after the known set and history the
     generator produces new waves (60/120/180...), no repeats.
 
-    🐟 TWO BYPASS ENGINES (v1.7+):
+    🎛️ FOUR BYPASS MODES (v2.0.8):
 
-    Menu "Bypass engine" — a checkbox "nfqws engine":
+    "⚙ Bypass modes…" opens the mode window: radio rows (click
+    anywhere on the row), buttons Start/Stop/Restart act on the
+    SELECTED mode. Starting one mode stops the others; re-starting
+    an active mode is a no-op.
 
-    • checkbox UNCHECKED — byedpi: SOCKS5 proxy on 127.0.0.1. Only
-      traffic sent into the proxy is bypassed (system/manual mode).
-      Applications must be configured to use the proxy.
+    • byedpi — SOCKS5 proxy on 127.0.0.1; only proxied apps are
+      bypassed. Tuning — "🎛 Mode settings".
 
-    • checkbox CHECKED — nfqws: packet interception via NFQUEUE:
-      nftables rules direct the first packets of ALL outgoing TCP
-      connections (ports 80/443) into a queue, nfqws distorts them
-      (desync). NO application configuration is needed — works
-      machine-wide.
+    • nfqws — zapret desyncs via NFQUEUE: distorts packets of ALL
+      applications (ports 80/443), zero app configuration. The most
+      powerful against SNI/IP filters.
+
+    • snimod — our engine #3: uppercases the SNI (www.youtube.com →
+      WWW.YOUTUBE.COM). Hosts — "Mode settings" → "Parameters".
+
+    • DNS bridge — local DoT resolver 127.0.0.1:53 → upstream:853
+      (default 1.1.1.1; change in "Mode settings" → "Builder").
+      Fixes provider NXDOMAIN spoofing. Works standalone and
+      alongside any engine.
 
     ⭐ The engine choice does NOT depend on whether the service is
     running: a stopped nfqws remains the selected engine — the menu,
@@ -393,7 +438,7 @@ HELP_SECTIONS = {
 
 
 ABOUT_TEXTS = {
-    'ru': """🔰 CIADPI Advanced Indicator v2.0.7
+    'ru': """🔰 CIADPI Advanced Indicator v2.0.8
 
     📡 Продвинутый индикатор для управления сервисом обхода DPI
 
@@ -419,6 +464,7 @@ ABOUT_TEXTS = {
 
     🔗 ПРОЕКТ ОСНОВАН НА:
     • byedpi/ciadpi — https://github.com/hufrea/byedpi
+    • nfqws (движок десинков) — https://github.com/bol-van/zapret
     • Идейно на лаунчере Zapret для windows с сайта https://topersoft.com
     • Теме на ru форуме Ubuntu по byeDPI (форум цензурный и не юзерфрендли,
       поэтому без ссылки на него соответственно)
@@ -427,7 +473,7 @@ ABOUT_TEXTS = {
 
     💻 РАЗРАБОТЧИК: Templard
 """,
-    'en': """🔰 CIADPI Advanced Indicator v2.0.7
+    'en': """🔰 CIADPI Advanced Indicator v2.0.8
 
     📡 Advanced tray indicator for managing a DPI bypass service
 
@@ -453,6 +499,7 @@ ABOUT_TEXTS = {
 
     🔗 PROJECT BASED ON:
     • byedpi/ciadpi — https://github.com/hufrea/byedpi
+    • nfqws (desync engine) — https://github.com/bol-van/zapret
     • Conceptually inspired by the Zapret launcher for Windows (https://topersoft.com)
     • A thread on the Russian Ubuntu forum about byeDPI (the forum is moderated
       and not user-friendly, hence no direct link)

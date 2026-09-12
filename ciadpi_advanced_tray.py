@@ -3080,9 +3080,14 @@ class AdvancedTrayIndicator:
             return False
         dialog.connect('destroy', on_dialog_destroy)
 
-        dialog.run()
-        GLib.source_remove(timer)
-        dialog.destroy()
+        # ⭐ v2.0.8: НЕМОДАЛЬНОЕ окно. dialog.run() ставил GTK-grab
+        # на всё приложение — пока окно режимов открыто, окно
+        # «Настройки режима» не реагировало (user: «не можем менять
+        # параметры, пока не закроем окно выбора режима»). Теперь
+        # show() без захвата — оба окна живут независимо.
+        dialog.show_all()
+        dialog.connect('delete-event',
+                       lambda d, e: (d.destroy(), True)[1])
 
     def show_profiles_dialog(self, widget=None):
         """⭐ v2.0.6: Профили — сохранение/применение/удаление наборов.
@@ -3219,8 +3224,10 @@ class AdvancedTrayIndicator:
         box.pack_start(btn_box, False, False, 0)
         content.pack_start(box, True, True, 0)
         content.show_all()
-        dialog.run()
-        dialog.destroy()
+        # ⭐ v2.0.8: немодально — окно профилей не блокирует другие
+        dialog.show_all()
+        dialog.connect('delete-event',
+                       lambda d, e: (d.destroy(), True)[1])
 
     def show_snimod_settings(self, widget=None):
         """Диалог настроек snimod: список хостов для uppercase SNI."""
