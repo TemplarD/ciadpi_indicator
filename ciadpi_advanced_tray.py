@@ -1234,13 +1234,14 @@ class AdvancedTrayIndicator:
         # НАСТОЯЩИМИ Gtk.Switch — кружочек в овальчике, переключение
         # без закрытия, статус обновляется живьём. Текст пункта
         # показывает текущий выбор.
-        engines_item = Gtk.MenuItem(label='⚙ Движки обхода…')
+        engines_item = Gtk.MenuItem(label='⚙ Режимы обхода…')
         engine_names = {'byedpi': 'byedpi (SOCKS)',
                         'nfqws': 'nfqws (NFQUEUE)',
-                        'snimod': 'snimod (SNI case-mod)'}
-        eng_now = (NFQWS_AVAILABLE or True) and self._active_engine()
+                        'snimod': 'snimod (SNI case-mod)',
+                        'bridge': 'DNS-мост (DoT)'}
+        eng_now = self._active_engine()
         engines_item.set_label(
-            f"⚙ Движки обхода…  [выбран: "
+            f"⚙ Режимы обхода…  [выбран: "
             f"{engine_names.get(eng_now, eng_now)}]")
         engines_item.set_tooltip_text(
             'Окно с переключателями-свичами: byedpi ↔ nfqws ↔ snimod')
@@ -1396,7 +1397,8 @@ class AdvancedTrayIndicator:
             try:
                 engine = self._active_engine()
                 engine_units = {'nfqws': 'ciadpi-nfqws.service',
-                                'snimod': 'ciadpi-snimod.service'}
+                                'snimod': 'ciadpi-snimod.service',
+                                'bridge': 'ciadpi-dotbridge.service'}
                 unit = engine_units.get(engine, 'ciadpi.service')
                 try:
                     r = subprocess.run(
@@ -1413,6 +1415,8 @@ class AdvancedTrayIndicator:
                         params_text = self.get_current_service_params()
                     except Exception:
                         params_text = None
+                if engine == 'bridge':
+                    status = ('active' if status == 'active' else status)
                 GLib.idle_add(self._apply_status_ui, engine, status, params_text)
             finally:
                 self._status_busy = False
@@ -1428,11 +1432,14 @@ class AdvancedTrayIndicator:
                 status_text = (t('status.running_nfqws') if engine == 'nfqws'
                                else ('SNI case-mod: работает'
                                      if engine == 'snimod'
-                                     else t('status.running')))
+                                     else ('DNS-мост: работает'
+                                           if engine == 'bridge'
+                                           else t('status.running'))))
                 status_label = (
                     t('status.running_s_nfqws') if engine == 'nfqws'
                     else ('SNI case-mod: активен' if engine == 'snimod'
-                          else t('status.running_s')))
+                          else ('DNS-мост: активен' if engine == 'bridge'
+                                else t('status.running_s'))))
             else:
                 status_text = t('status.stopped')
                 status_label = t('status.stopped_s')
@@ -2508,19 +2515,16 @@ class AdvancedTrayIndicator:
     # ---------------- Переключатель движка: byedpi ↔ nfqws ----------------
 
     def _active_engine(self):
-        """Какой движок ВЫБРАН: 'byedpi' | 'nfqws' | 'snimod' — липкий
-        выбор из конфига.
+        """Какой режим ВЫБРАН: 'byedpi' | 'nfqws' | 'snimod' | 'bridge'.
 
-        ⭐ Выбор движка НЕ зависит от живости сервиса: остановленный nfqws
-        остаётся выбранным nfqws — меню, Start/Stop/Restart и статус
-        продолжают управлять ИМ. Раньше движок выводился из is-active
-        сервисов (оба inactive → None) — из-за этого «Остановить» менял
-        режим на byedpi, а «Запустить» поднимал не тот движок.
-        Живость сервиса — отдельный вопрос статуса, не выбора.
-
-        ⭐ v2.0: третий движок — snimod (SNI case-mod, наша разработка).
+        ⭐ v2.0.6.1: bridge_mode=True в конфиге (выбран DNS-мост в
+        окне режимов) → главное меню Start/Stop управляет МОСТОМ.
+        Липкий выбор из конфига, живость сервиса — отдельный вопрос.
         """
-        engine = (self.current_params or {}).get('engine', 'byedpi')
+        cfg = self.current_params or {}
+        if cfg.get('bridge_mode'):
+            return 'bridge'
+        engine = cfg.get('engine', 'byedpi')
         if engine == 'nfqws' and not (NFQWS_AVAILABLE and self.nfqws):
             return 'byedpi'  # модуль nfqws недоступен — безопасный fallback
         if engine == 'snimod' and not (SNIMOD_AVAILABLE and self.snimod):
@@ -2804,7 +2808,8 @@ class AdvancedTrayIndicator:
         status_lbl = Gtk.Label()
         status_lbl.set_xalign(0)
 
-        # ЯВНЫЙ выбор в окне (локальная переменная, не конфиг!)
+        # ЯВНЫЙ выбор в окне (локальная переменная): из конфига,
+        # включая bridge_mode (v2.0.6.1 — выбор моста сохраняется)
         state = {'selected': self._active_engine()}
 
         radio_buttons = {}
@@ -2817,10 +2822,19 @@ class AdvancedTrayIndicator:
                 state['selected'] = name
                 ui_set_status(f'Выбран режим: <b>{name}</b> '
                               '(запуск — кнопкой ниже)')
-                # выбор сразу в конфиг (без автозапуска — прежнее правило)
-                if name != self._active_engine() and name != 'bridge':
-                    self.current_params['engine'] = name
-                    self.save_config()
+                # ⭐ ФИКС («выбор не сохраняется»): пишем В КОФИГ ВСЕГДА
+                # (включая bridge — чтобы главное меню старотовало
+                # выбранный режим, а не «просто первый»). Если bridge
+                # выбран как режим — он остаётся самостоятельным, но
+                # конфиг помнит выбор; движковый флаг engine при этом
+                # не трогаем (у моста свой юнит).
+                if name == 'bridge':
+                    self.current_params['bridge_mode'] = True
+                else:
+                    self.current_params['bridge_mode'] = False
+                    if name != self._active_engine():
+                        self.current_params['engine'] = name
+                self.save_config()
 
         for name, title, desc in modes:
             row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
@@ -2846,12 +2860,26 @@ class AdvancedTrayIndicator:
             st_lbl = Gtk.Label()
             st_lbl.set_markup('<small>…</small>')
             st_lbl.set_valign(Gtk.Align.CENTER)
-            mode_status = {name: st_lbl}
             row.pack_start(rb, False, False, 0)
             row.pack_start(lbl_box, True, True, 0)
             row.pack_start(st_lbl, False, False, 4)
-            box.pack_start(row, False, False, 2)
+            # ⭐ ФИКС («выбор не сохраняется»): клика была доступна
+            # только маленькая radio-точка; вся остальная строка —
+            # мёртвая. EventBox делает КЛИКАБЕЛЬНОЙ ВСЮ строку:
+            # и заголовок, и описание.
+            ev_row = Gtk.EventBox()
+            ev_row.add(row)
+            ev_row.connect('button-press-event',
+                           lambda w, e, _rb=rb: _rb.set_active(True)
+                           or False)
+            ev_row.set_tooltip_text('Клик — выбрать этот режим')
+            box.pack_start(ev_row, False, False, 2)
             radio_buttons[name] = rb
+            # тест-хуки: прямые ссылки на radio и статус-лейблы
+            # (GUI-тестам не нужно обходить дерево виджетов)
+            if getattr(self, '_mode_radios', None) is None:
+                self._mode_radios = {}
+            self._mode_radios[name] = rb
             # держим ссылки на статус-лейблы для тикера
             if not hasattr(self, '_mode_status_labels') or \
                     self._mode_status_labels is None:
@@ -2871,15 +2899,19 @@ class AdvancedTrayIndicator:
                 b.set_sensitive(not on)
 
         def _run_op(fn, verb):
-            """Запуск операции бэкенда в фоне; GUI не блокируется."""
+            """Запуск операции бэкенда в фоне; GUI не блокируется.
+
+            ⭐ ФИКС: бэкенд возвращает (ok, msg) — раньше результат
+            выбрасывался и окно говорило «готово» даже при провале
+            («режимы не запускаются совсем»).
+            """
             target = state['selected']
             _busy(True)
             ui_set_status(f'⏳ {verb} <b>{target}</b>…')
 
             def worker():
                 try:
-                    fn()
-                    ok, msg = True, ''
+                    ok, msg = fn()
                 except Exception as e:
                     ok, msg = False, str(e)
                 def done():
@@ -2894,7 +2926,10 @@ class AdvancedTrayIndicator:
 
         def on_start(btn):
             target = state['selected']
-            _run_op(lambda: ec.start_engine(target), 'запуск')
+            if target == 'bridge':
+                _run_op(ec.start_bridge, 'запуск')
+            else:
+                _run_op(lambda: ec.start_engine(target), 'запуск')
 
         def on_stop(btn):
             target = state['selected']
@@ -2916,6 +2951,9 @@ class AdvancedTrayIndicator:
         btn_restart.connect('clicked', on_restart)
         btn_close.connect('clicked', lambda b: dialog.response(
             Gtk.ResponseType.CLOSE))
+        # тест-хуки: кнопки операции
+        self._mode_btns = {'start': btn_start, 'stop': btn_stop,
+                           'restart': btn_restart}
         btn_box.pack_start(btn_start, False, False, 0)
         btn_box.pack_start(btn_stop, False, False, 0)
         btn_box.pack_start(btn_restart, False, False, 0)
@@ -2952,6 +2990,8 @@ class AdvancedTrayIndicator:
         def on_dialog_destroy(d):
             self._engines_window = None
             self._mode_status_labels = None
+            self._mode_radios = None
+            self._mode_btns = None
             return False
         dialog.connect('destroy', on_dialog_destroy)
 
