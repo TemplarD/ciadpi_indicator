@@ -2738,7 +2738,7 @@ class AdvancedTrayIndicator:
                 ciadpi_mode_settings.ModeSettingsWindow(self)
         # хуки конструкторов для вкладки «Конструктор»
         self._mode_settings_window.param_builder_cb = \
-            self._build_byedpi_builder_widget
+            self._build_full_byedpi_builder
         self._mode_settings_window.nfqws_builder_cb = \
             self._build_nfqws_builder_widget
         self._mode_settings_window.present()
@@ -2783,10 +2783,15 @@ class AdvancedTrayIndicator:
 
         return self._build_simple_builder(
             fields=[
-                ('--dpi-desync', 'Метод (disorder2/fake,split2/…)',
-                 None, None, None, None),
+                ('--dpi-desync', 'Метод десинка (disorder2/fake,split2/…)',
+                 None, None, None),
                 ('--dpi-desync-split-pos', 'Позиция сплита', 1, 30, 1),
+                ('--dpi-desync-split-seqovl', 'Перекрытие seq (split)', 0, 64, 1),
                 ('--dpi-desync-ttl', 'TTL фейка', 1, 12, 1),
+                ('--dpi-desync-autottl', 'Авто-TTL (1=вкл)', 0, 2, 1),
+                ('--dpi-desync-fake-tls', 'Фейк-TLS (1/2=тип)', 0, 2, 1),
+                ('--dpi-desync-fooling', 'Фулинг (badsum/md5sig/badseq…)',
+                 None, None, None),
             ],
             parse=parse_nfqws, update=update_nfqws)
 
@@ -3242,6 +3247,11 @@ class AdvancedTrayIndicator:
         dialog.show_all()
         dialog.connect('delete-event',
                        lambda d, e: (d.destroy(), True)[1])
+        # ⭐ v2.0.10 (user: «профили не закрываются по кнопке Закрыть»):
+        # немодальный show() не запускает run() → response никто не
+        # слушал. Слушаем response вручную → destroy.
+        dialog.connect('response',
+                       lambda d, r: d.destroy())
 
     def show_snimod_settings(self, widget=None):
         """Диалог настроек snimod: список хостов для uppercase SNI."""
@@ -4209,24 +4219,29 @@ class AdvancedTrayIndicator:
     # ================= КОНСТРУКТОР ПАРАМЕТРОВ =================
 
     def show_param_builder(self, widget=None):
-        """Окно-конструктор: хирургическое редактирование параметров.
+        """Совместимость-обёртка: полный конструктор во вкладке
+        «Настройки режима». Прямой диалог больше не используется —
+        открываем окно настроек режима на вкладке Конструктор."""
+        self.show_mode_settings()
 
-        Каждое поле правит ТОЛЬКО свой флаг в строке (update_param_in_string),
-        не пересобирая её целиком — порядок и прочие параметры сохраняются.
-        «?» показывает подробную подсказку по конкретному параметру
-        (не зависящую от полной справки), на языке интерфейса.
+    def _build_full_byedpi_builder(self):
+        """⭐ v2.0.10: ПОЛНЫЙ конструктор byedpi как виджет-вкладка.
+
+        Вычленен из старого диалогового show_param_builder: все
+        регуляторы со справками «?», живая синхронизация со строкой
+        параметров окна «Настройки режима» (params_entry).
         """
         if not PARAMS_SPEC_AVAILABLE:
-            self.show_notification(t('notif.error'),
-                                   "ciadpi_params_spec.py не найден")
-            return
-
-        dialog = Gtk.Dialog(title=t('builder.title'), flags=0)
-        dialog.add_buttons(t('btn.close'), Gtk.ResponseType.CLOSE,
-                           t('btn.ok'), Gtk.ResponseType.OK)
-        dialog.set_default_size(860, 640)
-
-        content = dialog.get_content_area()
+            return None
+        current_str = None
+        ms = getattr(self, '_mode_settings_window', None)
+        if ms is not None and getattr(ms, 'params_entry', None) \
+                is not None:
+            current_str = ms.params_entry.get_text()
+        if not current_str:
+            current_str = getattr(self, '_cached_params_text', None) \
+                or self.default_params
+        parsed = parse_params(current_str)
         main_vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         main_vbox.set_margin_top(10); main_vbox.set_margin_bottom(10)
         main_vbox.set_margin_start(10); main_vbox.set_margin_end(10)
@@ -4395,28 +4410,19 @@ class AdvancedTrayIndicator:
         scrolled.add(controls_box)
         main_vbox.pack_start(scrolled, True, True, 0)
 
-        content.pack_start(main_vbox, True, True, 0)
-        content.show_all()
 
         str_entry.connect("changed", refresh_widgets_from_string)
 
-        response = dialog.run()
-
-        if response == Gtk.ResponseType.OK:
-            final_str = str_entry.get_text().strip()
-            valid, err_msg = self.validate_params(final_str)
-            if valid and final_str and final_str != current_str:
-                self.show_notification(t('notif.restart_title'),
-                                       t('notif.restarting'))
-                threading.Thread(
-                    target=self.update_service_params,
-                    args=(final_str,),
-                    daemon=True
-                ).start()
-            elif not valid:
-                self.show_notification(t('notif.error'), err_msg.split('\n')[0])
-
-        dialog.destroy()
+        # ⭐ v2.0.10: синхронизация со строкой окна настроек режима —
+        # правка любого регулятора обновляет ОБЩУЮ строку ввода
+        def _sync_to_mode_window():
+            ms2 = getattr(self, '_mode_settings_window', None)
+            if ms2 is not None and getattr(ms2, 'params_entry', None) \
+                    is not None:
+                ms2.params_entry.set_text(str_entry.get_text())
+            return True
+        str_entry.connect("changed", lambda e: _sync_to_mode_window())
+        return main_vbox
 
     def _show_param_tip(self, message):
         """Диалог подробной подсказки по одному параметру конструктора."""
@@ -4509,6 +4515,10 @@ class AdvancedTrayIndicator:
         dialog.show_all()
         dialog.connect('delete-event',
                        lambda d, e: (d.destroy(), True)[1])
+        # ⭐ v2.0.10 (user: «справка не закрывается по кнопке ОК»):
+        # response без run() никто не слушал — слушаем вручную.
+        dialog.connect('response',
+                       lambda d, r: d.destroy())
 
     def show_about(self, widget):
         """Окно «О программе» (на языке интерфейса)"""

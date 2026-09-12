@@ -410,71 +410,82 @@ class ModeSettingsWindow:
 
     # ---------------- вкладка «Конструктор» ----------------
 
+    def _bridge_builder_widget(self):
+        """⭐ v2.0.10: виджет настроек DNS-моста.
+
+        Общий для bridge-режима и snimod-конструктора (user: «для
+        синмода можно конструктор мостов такой же добавить — там
+        мост тоже используется»: snimod стартует мост через Wants=).
+        """
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        frame = Gtk.Frame(
+            label='Настройки DNS-моста (upstream DoT-резолвер)')
+        fbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL,
+                       spacing=6)
+        fbox.set_margin_top(6)
+        fbox.set_margin_bottom(6)
+        fbox.set_margin_start(8)
+        fbox.set_margin_end(8)
+
+        cur = self._bridge_cfg()
+
+        row1 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
+                       spacing=6)
+        lbl1 = Gtk.Label(label='Upstream IP:')
+        lbl1.set_xalign(0)
+        self.bridge_upstream = Gtk.Entry()
+        self.bridge_upstream.set_text(cur.get('upstream', '1.1.1.1'))
+        self.bridge_upstream.set_tooltip_text(
+            'DNS-over-TLS сервер: 1.1.1.1 (Cloudflare), '
+            '8.8.8.8 (Google), 9.9.9.9 (Quad9)')
+        self.bridge_upstream.set_hexpand(True)
+        row1.pack_start(lbl1, False, False, 0)
+        row1.pack_start(self.bridge_upstream, True, True, 0)
+        fbox.pack_start(row1, False, False, 2)
+
+        row2 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
+                       spacing=6)
+        lbl2 = Gtk.Label(label='Имя TLS-сертификата:')
+        lbl2.set_xalign(0)
+        self.bridge_tlsname = Gtk.Entry()
+        self.bridge_tlsname.set_text(cur.get('tls_name',
+                                             'cloudflare-dns.com'))
+        self.bridge_tlsname.set_tooltip_text(
+            'server_hostname для проверки сертификата upstream')
+        self.bridge_tlsname.set_hexpand(True)
+        row2.pack_start(lbl2, False, False, 0)
+        row2.pack_start(self.bridge_tlsname, True, True, 0)
+        fbox.pack_start(row2, False, False, 2)
+
+        btn = Gtk.Button(label='Сохранить и перезапустить мост')
+        btn.connect('clicked', self._on_bridge_cfg_apply)
+        fbox.pack_start(btn, False, False, 2)
+
+        hint = Gtk.Label()
+        hint.set_markup(
+            '<small>Upstream общается по TLS (порт 853) — пров '
+            'не может подменить ответы, только заблокировать.\n'
+            'Если мост не стартует с вашим upstream — попробуйте '
+            '8.8.8.8/dns.google или 9.9.9.9/dns.quad9.</small>')
+        hint.set_xalign(0)
+        hint.set_line_wrap(True)
+        fbox.pack_start(hint, False, False, 4)
+        frame.add(fbox)
+        box.pack_start(frame, False, False, 4)
+        return box
+
     def _page_builder(self, mode):
         """Конструктор параметров под режим."""
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         if mode == 'bridge':
-            # ⭐ v2.0.8 (user: «для мостов какую-то настройку в
-            # конструкторе»): upstream DoT-резолвер и TTL кэша.
-            frame = Gtk.Frame(
-                label='Настройки DNS-моста (upstream DoT-резолвер)')
-            fbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL,
-                           spacing=6)
-            fbox.set_margin_top(6)
-            fbox.set_margin_bottom(6)
-            fbox.set_margin_start(8)
-            fbox.set_margin_end(8)
-
-            cur = self._bridge_cfg()
-
-            row1 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
-                           spacing=6)
-            lbl1 = Gtk.Label(label='Upstream IP:')
-            lbl1.set_xalign(0)
-            self.bridge_upstream = Gtk.Entry()
-            self.bridge_upstream.set_text(cur.get('upstream', '1.1.1.1'))
-            self.bridge_upstream.set_tooltip_text(
-                'DNS-over-TLS сервер: 1.1.1.1 (Cloudflare), '
-                '8.8.8.8 (Google), 9.9.9.9 (Quad9)')
-            self.bridge_upstream.set_hexpand(True)
-            row1.pack_start(lbl1, False, False, 0)
-            row1.pack_start(self.bridge_upstream, True, True, 0)
-            fbox.pack_start(row1, False, False, 2)
-
-            row2 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
-                           spacing=6)
-            lbl2 = Gtk.Label(label='Имя TLS-сертификата:')
-            lbl2.set_xalign(0)
-            self.bridge_tlsname = Gtk.Entry()
-            self.bridge_tlsname.set_text(cur.get('tls_name',
-                                                 'cloudflare-dns.com'))
-            self.bridge_tlsname.set_tooltip_text(
-                'server_hostname для проверки сертификата upstream')
-            self.bridge_tlsname.set_hexpand(True)
-            row2.pack_start(lbl2, False, False, 0)
-            row2.pack_start(self.bridge_tlsname, True, True, 0)
-            fbox.pack_start(row2, False, False, 2)
-
-            btn = Gtk.Button(label='Сохранить и перезапустить мост')
-            btn.connect('clicked', self._on_bridge_cfg_apply)
-            fbox.pack_start(btn, False, False, 2)
-
-            hint = Gtk.Label()
-            hint.set_markup(
-                '<small>Upstream общается по TLS (порт 853) — пров '
-                'не может подменить ответы, только заблокировать.\n'
-                'Если мост не стартует с вашим upstream — попробуйте '
-                '8.8.8.8/dns.google или 9.9.9.9/dns.quad9.</small>')
-            hint.set_xalign(0)
-            hint.set_line_wrap(True)
-            fbox.pack_start(hint, False, False, 4)
-            frame.add(fbox)
-            box.pack_start(frame, False, False, 4)
+            box.pack_start(self._bridge_builder_widget(), False, False, 4)
             return box
         if mode == 'snimod':
-            info = Gtk.Label(label='Параметры snimod — это список хостов '
-                                   '(вкладка «Параметры»).')
-            box.pack_start(info, True, True, 0)
+            # ⭐ v2.0.10 (user: «для синмода конструктор мостов такой
+            # же добавить»): хосты SNI + настройки моста вместе —
+            # snimod поднимает мост как свою часть.
+            box.pack_start(self._snimod_hosts_widget(), True, True, 4)
+            box.pack_start(self._bridge_builder_widget(), False, False, 4)
             return box
         # byedpi/nfqws — строим из спецификации
         # ⭐ ФИКС v2.0.9: хуки живут на ЭТОМ окне (self.param_builder_cb),
