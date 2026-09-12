@@ -1217,15 +1217,17 @@ class AdvancedTrayIndicator:
         menu.append(restart_item)
         
         menu.append(Gtk.SeparatorMenuItem())
-        
-        # Настройки
-        settings_item = Gtk.MenuItem(label=t('menu.settings'))
-        settings_item.connect("activate", self.show_settings)
-        # ⭐ Параметры в «Настройках» — byedpi-специфичные (формат -T3 -A…):
-        # при активном nfqws пункт скрыт (параметры другого движка в меню
-        # не показываем — их нельзя применить)
-        if not engine_is_nfqws:
-            menu.append(settings_item)
+
+        # ⭐ v2.0.7: ОДНО окно «Настройки режима» (user-проект):
+        # вкладки Параметры/Конструктор/Поиск под ВЫБРАННЫЙ режим,
+        # строка ввода синхронится с вкладками, дефолт + 4 последних
+        # (по режиму). Старые раздельные пункты (Настройки, Конструктор,
+        # параметры nfqws/snimod, Поиск стратегии) — выпилены отсюда:
+        # всё внутри окна.
+        mode_settings_item = Gtk.MenuItem(label='🎛 Настройки режима…')
+        mode_settings_item.connect("activate",
+                                   self.show_mode_settings)
+        menu.append(mode_settings_item)
 
         # ⭐ v2.0 (user: «должен быть ПЕРЕКЛЮЧАТЕЛЬ — кружочек в
         # овальчике с подписью, не пункт меню с текстом»): в меню
@@ -1267,32 +1269,8 @@ class AdvancedTrayIndicator:
                 label=t('engine.hint_service').format(st=svc_st))
             svc_item.set_sensitive(False)
             menu.append(svc_item)
-
-            # ⭐ Параметры движка — прямо в главном меню (симметрия
-            # с byedpi-«Настройками»; user: пункт был запрятан в
-            # подменю движка, которого больше нет)
-            if eng_now == 'nfqws' and self.nfqws:
-                nfqws_params_item = Gtk.MenuItem(
-                    label=t('engine.nfqws_params_menu'))
-                nfqws_params_item.connect("activate",
-                                          self.show_nfqws_settings)
-                menu.append(nfqws_params_item)
-            if eng_now == 'snimod' and self.snimod:
-                snimod_params_item = Gtk.MenuItem(
-                    label='Хосты snimod…')
-                snimod_params_item.connect("activate",
-                                           self.show_snimod_settings)
-                menu.append(snimod_params_item)
-
-        # ⭐ ПРИ NFQWS: пункты чужого движка (byedpi) вообще не попадают
-        # в меню — сереть/прятать нечего, при смене движка меню
-        # пересобирается (rebuild_menu) и набор пунктов меняется сам.
-        # Универсальные (справка, настройки приложения, логи, права,
-        # о программе) — показываются всегда.
-        if PARAMS_SPEC_AVAILABLE and not engine_is_nfqws:
-            builder_item = Gtk.MenuItem(label=t('menu.builder'))
-            builder_item.connect("activate", self.show_param_builder)
-            menu.append(builder_item)
+            # ⭐ v2.0.7: параметры движков (nfqws-строка, snimod-хосты)
+            # переехали в «🎛 Настройки режима…» — здесь больше пунктов нет
 
         proxy_item = Gtk.MenuItem(label=t('menu.proxy'))
         proxy_item.connect("activate", self.show_proxy_settings)
@@ -1316,25 +1294,10 @@ class AdvancedTrayIndicator:
         menu.append(whitelist_item)        
         
         menu.append(Gtk.SeparatorMenuItem())
-        
-        # Автопоиск и история (ищет параметры byedpi — при nfqws скрыты)
-        if self.autosearcher and not engine_is_nfqws:
-            autosearch_item = Gtk.MenuItem(label=t('menu.autosearch'))
-            autosearch_item.connect("activate", self.show_autosearch_dialog)
-            menu.append(autosearch_item)
 
-            history_item = Gtk.MenuItem(label=t('menu.history'))
-            history_item.connect("activate", self.show_history)
-            menu.append(history_item)
-
-            menu.append(Gtk.SeparatorMenuItem())
-
-        # ⭐ Поиск стратегии: работает для ОБОИХ движков — в диалоге есть
-        # селектор (byedpi = тестовый порт, nfqws = через реальный сервис).
-        # Пункт показываем всегда (user: «поиск исчезал в nfqws-режиме»).
-        strategy_item = Gtk.MenuItem(label=t('menu.strategy'))
-        strategy_item.connect("activate", self.show_strategy_search)
-        menu.append(strategy_item)
+        # ⭐ v2.0.7: автопоиск/история/поиск стратегии переехали
+        # в «🎛 Настройки режима…» (вкладка «Поиск стратегии», работает
+        # под выбранный режим). Обновление byedpi — общее, остаётся.
 
         # Обновление byedpi без переустановки — byedpi-пункт
         if not engine_is_nfqws:
@@ -2747,6 +2710,128 @@ class AdvancedTrayIndicator:
         dialog.destroy()
 
     # ---------------- ⭐ v2.0: окно-переключатель движков ----------------
+
+    def show_mode_settings(self, widget=None):
+        """⭐ v2.0.7: ОДНО окно настроек выбранного режима.
+
+        Вкладки Параметры/Конструктор/Поиск — под выбранный режим,
+        строка ввода синхронизируется со всеми вкладками. Полный
+        код окна — ciadpi_mode_settings.py (ModeSettingsWindow).
+        """
+        try:
+            import ciadpi_mode_settings
+        except ImportError:
+            import sys
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            import ciadpi_mode_settings
+        if getattr(self, '_mode_settings_window', None) is None:
+            self._mode_settings_window = \
+                ciadpi_mode_settings.ModeSettingsWindow(self)
+        # хуки конструкторов для вкладки «Конструктор»
+        self._mode_settings_window.param_builder_cb = \
+            self._build_byedpi_builder_widget
+        self._mode_settings_window.nfqws_builder_cb = \
+            self._build_nfqws_builder_widget
+        self._mode_settings_window.present()
+
+    def _build_byedpi_builder_widget(self):
+        """Компактный конструктор byedpi для вкладки «Конструктор».
+
+        Ключевые флаги с живой синхронизацией в params_entry окна
+        настроек (on_change-строка = текущая строка параметров).
+        """
+        try:
+            from ciadpi_params_spec import parse_params, \
+                update_param_in_string
+        except ImportError:
+            return None
+        return self._build_simple_builder(
+            fields=[
+                ('-T', 'Тактика (0-9)', 0, 9, 1),
+                ('-A', 'Метод десинка (нет/torst/torst2/…)', None, None, None),
+                ('-s', 'Смещение сплита', 0, 30, 1),
+                ('-r', 'Повторы', 0, 10, 1),
+            ],
+            parse=parse_params, update=update_param_in_string)
+
+    def _build_nfqws_builder_widget(self):
+        """Компактный конструктор nfqws (ключевые десинк-опции)."""
+        def parse_nfqws(s):
+            out = {}
+            for tok in (s or '').split():
+                if '=' in tok:
+                    k, v = tok.split('=', 1)
+                    out[k] = v
+                else:
+                    out[tok] = True
+            return out
+
+        def update_nfqws(s, key, value):
+            toks = [t for t in (s or '').split() if not t.startswith(key + '=')]
+            if value not in (None, '', False):
+                toks.append(f'{key}={value}')
+            return ' '.join(toks)
+
+        return self._build_simple_builder(
+            fields=[
+                ('--dpi-desync', 'Метод (disorder2/fake,split2/…)',
+                 None, None, None, None),
+                ('--dpi-desync-split-pos', 'Позиция сплита', 1, 30, 1),
+                ('--dpi-desync-ttl', 'TTL фейка', 1, 12, 1),
+            ],
+            parse=parse_nfqws, update=update_nfqws)
+
+    def _build_simple_builder(self, fields, parse, update):
+        """Простой регулятор-виджет: spin/entry на поле + live-строка."""
+        try:
+            import ciadpi_mode_settings as _ms
+        except ImportError:
+            return None
+        box = _ms.Gtk.Box(orientation=_ms.Gtk.Orientation.VERTICAL,
+                          spacing=6)
+        cur = (self._mode_settings_window.params_entry.get_text()
+               if getattr(self, '_mode_settings_window', None) else '')
+        parsed = parse(cur)
+
+        def on_field_change(key, value):
+            try:
+                new_str = update(
+                    self._mode_settings_window.params_entry.get_text(),
+                    key, value)
+                self._mode_settings_window.params_entry.set_text(new_str)
+            except Exception:
+                pass
+
+        for f in fields:
+            key, title, lo, hi, step = f
+            row = _ms.Gtk.Box(orientation=_ms.Gtk.Orientation.HORIZONTAL,
+                              spacing=6)
+            lbl = _ms.Gtk.Label(label=title)
+            lbl.set_xalign(0)
+            row.pack_start(lbl, False, False, 0)
+            if lo is None:
+                ent = _ms.Gtk.Entry()
+                ent.set_text(str(parsed.get(key, '') or ''))
+                ent.set_hexpand(True)
+                ent.connect('changed',
+                            lambda e, k=key: on_field_change(k, e.get_text()))
+                row.pack_start(ent, True, True, 0)
+            else:
+                sp = _ms.Gtk.SpinButton.new_with_range(lo, hi, step)
+                try:
+                    sp.set_value(float(parsed.get(key) or lo))
+                except Exception:
+                    sp.set_value(lo)
+                sp.connect('value-changed',
+                           lambda s, k=key: on_field_change(k, int(s.get_value())))
+                row.pack_start(sp, False, False, 0)
+            box.pack_start(row, False, False, 2)
+        hint = _ms.Gtk.Label()
+        hint.set_markup('<small>Изменения сразу пишутся в строку '
+                        'параметров сверху окна.</small>')
+        hint.set_xalign(0)
+        box.pack_start(hint, False, False, 4)
+        return box
 
     def show_engines_window(self, widget=None):
         """«Режимы обхода» — v2.0.6: ЧЁТКОЕ переключение.
