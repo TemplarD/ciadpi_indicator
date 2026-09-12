@@ -68,6 +68,8 @@ ${TARGET_USER} ALL=(root) NOPASSWD: /usr/bin/cp /etc/resolv.conf /etc/resolv.con
 ${TARGET_USER} ALL=(root) NOPASSWD: /usr/bin/cp /etc/resolv.conf.ciadpi-snapshot /etc/resolv.conf
 ${TARGET_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_BIN} start ciadpi-dotbridge.service, ${SYSTEMCTL_BIN} stop ciadpi-dotbridge.service, ${SYSTEMCTL_BIN} restart ciadpi-dotbridge.service, ${SYSTEMCTL_BIN} status ciadpi-dotbridge.service, ${SYSTEMCTL_BIN} is-active ciadpi-dotbridge.service, ${SYSTEMCTL_BIN} enable ciadpi-dotbridge.service, ${SYSTEMCTL_BIN} disable ciadpi-dotbridge.service
 ${TARGET_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_BIN} enable ciadpi-dotbridge.service ciadpi-snimod.service, ${SYSTEMCTL_BIN} disable ciadpi-dotbridge.service ciadpi-snimod.service, ${SYSTEMCTL_BIN} enable --now ciadpi-dotbridge.service, ${SYSTEMCTL_BIN} disable --now ciadpi-dotbridge.service
+${TARGET_USER} ALL=(root) NOPASSWD: ${NFT_BIN} -f /home/${TARGET_USER}/.config/ciadpi/ciadpi_bridge.nft
+${TARGET_USER} ALL=(root) NOPASSWD: ${NFT_BIN} delete table inet ciadpi_bridge
 EOF
 fi
 

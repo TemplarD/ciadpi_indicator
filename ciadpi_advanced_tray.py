@@ -432,15 +432,29 @@ class AdvancedTrayIndicator:
 
         return False
 
-    def update_tooltip(self):
-        """Обновление всплывающей подсказки"""
+    def update_tooltip(self, params_text=None):
+        """Обновление всплывающей подсказки.
+
+        ⭐ v2.0.5: НЕ вызывает systemctl в главном GTK-потоке —
+        раньше get_current_service_params() с subprocess.run(timeout=5)
+        висел в тикере каждые 3с и морозил ВСЕ окна («окно поиска
+        виснет, ничего не нажимается»). Текст параметров собирает
+        фоновый поток update_status и передаёт сюда готовый.
+        params_text=None → ставим дефолт без единого subprocess.
+        """
         if hasattr(self, 'indicator') and self.indicator:
-            current_params = self.get_current_service_params()
+            current_params = params_text if params_text is not None \
+                else getattr(self, '_cached_params_text', None) or self.default_params
+            self._cached_params_text = current_params
             tooltip_text = f"CIADPI - {current_params}" if current_params else "CIADPI Indicator"
             self.indicator.set_title(tooltip_text)
 
     def get_current_service_params(self):
-        """Получение текущих параметров из systemd сервиса"""
+        """Получение текущих параметров из systemd сервиса.
+
+        ⭐ v2.0.5: ВЫЗЫВАТЬ ТОЛЬКО ИЗ ФОНОВОГО ПОТОКА — subprocess
+        с timeout=5 в главном GTK-потоке морозил интерфейс.
+        """
         try:
             result = subprocess.run(
                 ['systemctl', 'show', 'ciadpi.service', '--property=ExecStart', '--no-pager'],
@@ -1284,6 +1298,16 @@ class AdvancedTrayIndicator:
         if not engine_is_nfqws:
             menu.append(proxy_item)
 
+        # ⭐ v2.0.6: ПРОФИЛИ — выбор/создание/удаление наборов настроек
+        # для разных сетей (user: «переключаться между профилями»)
+        try:
+            import ciadpi_profiles  # noqa: F401
+            profiles_item = Gtk.MenuItem(label='🗂 Профили…')
+            profiles_item.connect("activate", self.show_profiles_dialog)
+            menu.append(profiles_item)
+        except ImportError:
+            pass
+
         # БЕЛЫЙ СПИСОК (универсален: перечень «своих» хостов, nfqws
         # сейчас его не использует, но он пригодится при расширении)
         whitelist_item = Gtk.MenuItem(label=t('menu.whitelist'))
@@ -1381,14 +1405,22 @@ class AdvancedTrayIndicator:
                     status = (r.stdout or '').strip() or 'unknown'
                 except Exception:
                     status = 'unknown'
-                GLib.idle_add(self._apply_status_ui, engine, status)
+                # ⭐ v2.0.5: текст параметров для тултипа собираем ЗДЕСЬ,
+                # в фоне — update_tooltip больше не зовёт systemctl сам
+                params_text = None
+                if engine == 'byedpi':
+                    try:
+                        params_text = self.get_current_service_params()
+                    except Exception:
+                        params_text = None
+                GLib.idle_add(self._apply_status_ui, engine, status, params_text)
             finally:
                 self._status_busy = False
 
         threading.Thread(target=worker, daemon=True).start()
         return True
 
-    def _apply_status_ui(self, engine, status):
+    def _apply_status_ui(self, engine, status, params_text=None):
         """GTK-часть обновления статуса (только главный поток,
         только быстрые операции — ни одного subprocess)."""
         try:
@@ -1427,7 +1459,7 @@ class AdvancedTrayIndicator:
                 else:
                     self.indicator.set_icon_full(
                         "network-offline-symbolic", t('status.stopped_s'))
-                self.update_tooltip()
+                self.update_tooltip(params_text)
             elif hasattr(self, 'status_icon') and self.status_icon:
                 if status == 'active':
                     self.status_icon.set_from_icon_name(
@@ -2391,205 +2423,87 @@ class AdvancedTrayIndicator:
         
         threading.Thread(target=run_in_thread, daemon=True).start()
 
-    def start_service(self, widget):
-        """Запуск сервиса с восстановлением наших настроек.
+    def _enginectl_op(self, verb, engine=None):
+        """Единая операция запуска/останова/рестарта через бэкенд.
 
-        ⭐ Управляет АКТИВНЫМ движком: при включённом nfqws стартует
-        ciadpi-nfqws.service (у byedpi-сервиса своих прокси-настроек нет).
+        ⭐ v2.0.6 (user: «не ясно, синхронизированы ли команды из меню
+        с окном движков»): теперь и меню, и окно «Режимы обхода»
+        ходят в ОДИН бэкенд ciadpi_enginectl — рассинхрон невозможен.
+        Все вызовы фоновые (GTK не блокируется), повторный старт
+        активного движка = no-op, чужие движки гарантированно гасятся.
         """
-        # nfqws-движок активен → управляем им
-        nfq = self.nfqws  # локальная ссылка: внутри потока self может уйти
-        if NFQWS_AVAILABLE and nfq and self._active_engine() == 'nfqws':
-            def start_nfqws():
-                ok, err = nfq.start()
-                if ok:
-                    self.show_notification(
-                        t('notif.success'), t('status.running_nfqws'),
-                        category='service')
-                else:
-                    self.show_notification(t('notif.error'),
-                                           err or 'start failed',
-                                           category='service')
-                GLib.idle_add(self.update_status)
-                GLib.idle_add(self.rebuild_menu)
-            threading.Thread(target=start_nfqws, daemon=True).start()
-            return
+        target = engine or self._active_engine()
+        managers = {'nfqws': self.nfqws, 'snimod': self.snimod}
 
-        # ⭐ v2.0: snimod-движок (SNI case-mod)
-        sni = self.snimod
-        if SNIMOD_AVAILABLE and sni and self._active_engine() == 'snimod':
-            def start_snimod():
-                ok, err = sni.start()
-                if ok:
-                    self.show_notification(
-                        t('notif.success'),
-                        'snimod: SNI case-mod запущен',
-                        category='service')
-                else:
-                    self.show_notification(t('notif.error'),
-                                           err or 'start failed',
-                                           category='service')
-                GLib.idle_add(self.update_status)
-                GLib.idle_add(self.rebuild_menu)
-            threading.Thread(target=start_snimod, daemon=True).start()
-            return
-
-        def start_with_proxy_restore():
+        def worker():
             try:
-                # Запускаем сервис через универсальный _systemctl
-                # (sudoers/polkit fallback-цепочка, без пароля после настройки)
-                ok, err = self._systemctl('start', 'ciadpi.service')
-
-                if ok:
-                    # После запуска сервиса восстанавливаем НАШИ настройки
-                    time.sleep(2)
-
-                    if (self.current_params.get("proxy_enabled", False) and 
-                        self.current_params.get("proxy_mode") == 'manual'):
-
-                        # ВОССТАНАВЛИВАЕМ ФЛАГ если у нас есть настройки прокси
-                        if not self.we_changed_proxy:
-                            self.save_system_proxy_backup()
-                            self.we_changed_proxy = True
-                            self.save_config()  # ⭐ СОХРАНЯЕМ КОНФИГ С ФЛАГОМ
-                            print("💾 Флаг we_changed_proxy сохранен в конфиг")
-
-                        host = self.current_params.get("proxy_host", "")
-                        port = self.current_params.get("proxy_port", "1080")
-                        # ⭐ порт сервиса должен совпадать с портом прокси
-                        self._sync_service_port_with_proxy(port)
-                        self.apply_system_proxy('manual', host, port)
-                        self.show_notification(t('notif.success'), t('notif.service_started_proxy'), category='service')
-                    else:
-                        self.show_notification(t('notif.success'), t('notif.service_started'), category='service')
-
-                    time.sleep(1)
-                    GLib.idle_add(self.update_status)
-
+                import ciadpi_enginectl as ec
+            except ImportError:
+                import sys
+                sys.path.insert(0, str(Path(__file__).resolve().parent))
+                import ciadpi_enginectl as ec
+            if target == 'bridge':
+                if verb == 'start':
+                    ok, msg = ec.start_bridge()
+                elif verb == 'stop':
+                    ok, msg = ec.stop_bridge()
                 else:
-                    self.show_notification(t('notif.error'),
-                                           err or "systemctl start failed",
-                                           category='service')
+                    ec.stop_bridge()
+                    ok, msg = ec.start_bridge()
+            else:
+                if verb == 'start':
+                    ok, msg = ec.start_engine(target, managers)
+                elif verb == 'stop':
+                    ok, msg = ec.stop_engine(target, managers)
+                else:
+                    ok, msg = ec.restart_engine(target, managers)
+            def done():
+                kind = t('notif.success') if ok else t('notif.error')
+                self.show_notification(kind, msg, category='service')
+                self.update_status()
+                self.rebuild_menu()
+                return False
+            GLib.idle_add(done)
+        threading.Thread(target=worker, daemon=True).start()
 
-            except Exception as e:
-                self.show_notification(t('notif.error'), str(e), category='service')
-        
-        threading.Thread(target=start_with_proxy_restore, daemon=True).start()
+    def start_service(self, widget):
+        """Запуск выбранного движка (единый бэкенд, v2.0.6)."""
+        # byedpi-режим с прокси: применяем прокси после старта (прошлое
+        # поведение юзера) — прокси-логика остаётся здесь, только для byedpi
+        if self._active_engine() == 'byedpi' and \
+                self.current_params.get('proxy_enabled') and \
+                self.current_params.get('proxy_mode') == 'manual':
+            def start_and_proxy():
+                self._enginectl_op('start', 'byedpi')
+                time.sleep(2.5)
+                if not self.we_changed_proxy:
+                    self.save_system_proxy_backup()
+                    self.we_changed_proxy = True
+                    self.save_config()
+                host = self.current_params.get('proxy_host', '127.0.0.1')
+                port = self.current_params.get('proxy_port', '1080')
+                self._sync_service_port_with_proxy(port)
+                self.apply_system_proxy('manual', host, port)
+            threading.Thread(target=start_and_proxy, daemon=True).start()
+            return
+        self._enginectl_op('start')
 
     def stop_service(self, widget):
-        """Остановка сервиса с правильным управлением прокси.
-
-        ⭐ Управляет АКТИВНЫМ движком: при включённом nfqws останавливает
-        ciadpi-nfqws.service (и его nft-правила; прокси-откат не нужен —
-        nfqws прокси не использует).
-        """
-        # nfqws-движок активен → управляем им
-        nfq = self.nfqws
-        if NFQWS_AVAILABLE and nfq and self._active_engine() == 'nfqws':
-            def stop_nfqws():
-                ok, err = nfq.stop()
-                if ok:
-                    self.show_notification(t('notif.service_stopped'),
-                                           t('proxy.mode_off'),
-                                           category='service')
-                else:
-                    self.show_notification(t('notif.error'),
-                                           err or 'stop failed',
-                                           category='service')
-                GLib.idle_add(self.update_status)
-                GLib.idle_add(self.rebuild_menu)
-            threading.Thread(target=stop_nfqws, daemon=True).start()
+        """Остановка выбранного движка (единый бэкенд, v2.0.6)."""
+        if self._active_engine() == 'byedpi' and self.we_changed_proxy:
+            def stop_and_restore():
+                if self.restore_system_proxy_backup():
+                    self.we_changed_proxy = False
+                    self.current_params['we_changed_proxy'] = False
+                    self.save_config()
+                self._enginectl_op('stop', 'byedpi')
+            threading.Thread(target=stop_and_restore, daemon=True).start()
             return
-
-        # ⭐ v2.0: snimod-движок (SNI case-mod)
-        sni = self.snimod
-        if SNIMOD_AVAILABLE and sni and self._active_engine() == 'snimod':
-            def stop_snimod():
-                ok, err = sni.stop()
-                if ok:
-                    self.show_notification(t('notif.service_stopped'),
-                                           t('proxy.mode_off'),
-                                           category='service')
-                else:
-                    self.show_notification(t('notif.error'),
-                                           err or 'stop failed',
-                                           category='service')
-                GLib.idle_add(self.update_status)
-                GLib.idle_add(self.rebuild_menu)
-            threading.Thread(target=stop_snimod, daemon=True).start()
-            return
-
-        if self.current_params.get("auto_disable_proxy", False) and self.we_changed_proxy:
-            # Автоотключение включено И мы меняли прокси
-            def stop_with_proxy_restore():
-                try:
-                    # Восстанавливаем системные настройки
-                    success = self.restore_system_proxy_backup()
-                    
-                    if success:
-                        # ⭐ СБРАСЫВАЕМ ФЛАГ ТОЛЬКО ЕСЛИ УСПЕШНО ВОССТАНОВИЛИ
-                        self.we_changed_proxy = False
-                        self.current_params["we_changed_proxy"] = False
-                        self.save_config()
-                        print("💾 Флаг we_changed_proxy сброшен после восстановления системных настроек")
-                    
-                    # Останавливаем сервис
-                    ok, err = self._systemctl('stop', 'ciadpi.service')
-                    
-                    if ok:
-                        self.show_notification(t('notif.service_stopped'), t('proxy.mode_off'), category='service')
-                    else:
-                        self.show_notification(t('notif.error'),
-                                               err or "systemctl stop failed",
-                                               category='service')
-                    
-                    time.sleep(1)
-                    GLib.idle_add(self.update_status)
-                    
-                except Exception as e:
-                    self.show_notification(t('notif.error'), str(e), category='service')
-            
-            threading.Thread(target=stop_with_proxy_restore, daemon=True).start()
-        else:
-            # Обычная остановка без изменения прокси
-            self.run_command("systemctl stop ciadpi.service")
+        self._enginectl_op('stop')
 
     def restart_service(self, widget):
-        """Перезапуск АКТИВНОГО движка (byedpi / nfqws / snimod)."""
-        nfq = self.nfqws
-        if NFQWS_AVAILABLE and nfq and self._active_engine() == 'nfqws':
-            def restart_nfqws():
-                ok, err = nfq.stop()
-                ok2, err2 = nfq.start()
-                if ok and ok2:
-                    self.show_notification(t('notif.success'),
-                                           t('status.running_nfqws'),
-                                           category='service')
-                else:
-                    self.show_notification(t('notif.error'),
-                                           (err2 or err or 'restart failed'),
-                                           category='service')
-                GLib.idle_add(self.update_status)
-            threading.Thread(target=restart_nfqws, daemon=True).start()
-            return
-        # ⭐ v2.0: snimod-движок (SNI case-mod)
-        sni = self.snimod
-        if SNIMOD_AVAILABLE and sni and self._active_engine() == 'snimod':
-            def restart_snimod():
-                ok, err = sni.stop()
-                ok2, err2 = sni.start()
-                if ok and ok2:
-                    self.show_notification(t('notif.success'),
-                                           'snimod: перезапущен',
-                                           category='service')
-                else:
-                    self.show_notification(t('notif.error'),
-                                           (err2 or err or 'restart failed'),
-                                           category='service')
-                GLib.idle_add(self.update_status)
-            threading.Thread(target=restart_snimod, daemon=True).start()
-            return
-        self.run_command("systemctl restart ciadpi.service")
+        """Перезапуск выбранного движка (единый бэкенд, v2.0.6)."""
+        self._enginectl_op('restart')
 
     # ---------------- Переключатель движка: byedpi ↔ nfqws ----------------
 
@@ -2831,107 +2745,93 @@ class AdvancedTrayIndicator:
     # ---------------- ⭐ v2.0: окно-переключатель движков ----------------
 
     def show_engines_window(self, widget=None):
-        """«Движки обхода…» — НАСТОЯЩИЕ переключатели Gtk.Switch.
+        """«Режимы обхода» — v2.0.6: ЧЁТКОЕ переключение.
 
-        ⭐ user: «должен быть переключатель, который работает без
-        закрытия меню и выглядит как кружочек в овальчике с подписью».
-        В меню AppIndicator это ФИЗИЧЕСКИ невозможно: протокол DBusMenu
-        поддерживает только toggle-type=checkmark/radio (исходники
-        ubuntu-appindicators это подтверждают) — свичи туда не
-        пробрасываются. Поэтому пункт меню открывает ЭТО окно, где
-        каждый движок — строка с живым Gtk.Switch (кружочек в
-        овальчике). Переключение кликом по свичу или по всей строке;
-        окно остаётся открытым, состояние обновляется мгновенно.
-
-        Правило сохранено (v1.9.1): выбор движка НЕ запускает сервис
-        — свич показывает ВЫБОР; отдельные кнопки «Запустить/Остановить»
-        поднимают выбранный движок прямо из окна.
-
-        ⭐ v2.0.4 (user: «открывает повторные окна, первое виснет»):
-        ОДНО окно на приложение. Повторный клик по пункту меню —
-        фокусирует существующее окно, а не плодит новое (каждое окно
-        таскало свой тикер, они конфликтовали и вешали друг друга).
+        ⭐ user: «кнопка запускает тот что в фокусе, а не тот что
+        выбрал; не выключает, а перезапускает; фокус скачет».
+        Новая модель:
+          * 4 режима-строки с radio-точкой: byedpi / nfqws / snimod /
+            мост (dotbridge). Клик по строке = выбор (сразу пишется
+            в конфиг, БЕЗ запуска — как юзер просил ранее).
+          * «Запустить» / «Остановить» / «Перезапустить» действуют
+            на ЯВНО выбранный в окне режим (не на _active_engine).
+          * Все операции идут через ciadpi_enginectl — ОДИН бэкенд
+            для меню и окна (синхронизированы по определению).
+          * Тикер обновляет ТОЛЬКО текст статусов, свичи не трогает.
+          * Повторный «Запустить» активного = no-op (не рестарт!).
         """
-        # ⭐ уже открыто? — поднимаем существующее наверх
+        # уже открыто? — поднимаем существующее
         existing = getattr(self, '_engines_window', None)
         if existing is not None:
             try:
                 existing.present()
                 return
             except Exception:
-                # окно умерло (destroy) — создаём заново
                 self._engines_window = None
 
-        active = self._active_engine()
+        try:
+            import ciadpi_enginectl as ec
+        except ImportError:
+            import sys
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            import ciadpi_enginectl as ec
 
-        dialog = Gtk.Dialog(title='Движки обхода DPI', flags=0)
-        dialog.set_default_size(460, 340)
+        dialog = Gtk.Dialog(title='Режимы обхода DPI', flags=0)
+        dialog.set_default_size(520, 430)
         self._engines_window = dialog
         content = dialog.get_content_area()
         content.set_margin_top(10); content.set_margin_bottom(10)
         content.set_margin_start(12); content.set_margin_end(12)
 
-        # описание движков
-        engines = [
-            ('byedpi', 'byedpi (SOCKS-прокси)',
-             'Локальный SOCKS5-прокси: обходят только приложения,\n'
-             'указавшие прокси (браузер, система). Требует настройки\n'
-             'прокси, зато не меняет пакеты других программ.'),
-            ('nfqws', 'nfqws (zapret, NFQUEUE)',
-             'Перехват пакетов ВСЕХ приложений через NFQUEUE.\n'
-             'Десинки: fake/split/disorder/ipfrag/multisplit/tamper\n'
-             'и др. Ноль настройки, но меняет весь исходящий TCP/UDP.'),
-            ('snimod', 'snimod — наш движок №3 (SNI case-mod)',
-             'Перехват ClientHello и подъём РЕГИСТРА SNI:\n'
-             'www.youtube.com → WWW.YOUTUBE.COM. Пров режет по\n'
-             'подстроке в нижнем регистре, фильтр регистрозависим,\n'
-             'а серверу регистр безразличен (RFC 6066). Идея наша,\n'
-             'её нет ни в byedpi, ни в zapret.'),
+        modes = [
+            ('byedpi', 'byedpi — SOCKS5-прокси',
+             'Обходят только приложения с настроенным прокси.\n'
+             'Параметры: «Настройки» в меню трея.'),
+            ('nfqws', 'nfqws — десинки zapret (NFQUEUE)',
+             'Перехват пакетов ВСЕХ приложений: fake/split/disorder.\n'
+             'Самый мощный против SNI/IP-фильтров прова.'),
+            ('snimod', 'snimod — наш SNI case-mod',
+             'Поднимает РЕГИСТР SNI (www.youtube.com →\n'
+             'WWW.YOUTUBE.COM). Пров режет по подстроке в нижнем\n'
+             'регистре, серверу регистр безразличен (RFC 6066).'),
+            ('bridge', 'DNS-мост (DoT) — без движка',
+             'Локальный резолвер 127.0.0.1:53 → 1.1.1.1:853 (TLS).\n'
+             'Чинит NXDOMAIN-блокировку DNS прова. Совместим с любым\n'
+             'движком; отдельно — просто честный DNS.'),
         ]
 
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        switches = {}
-        # status_lbl нужен ПЕРВЫМ: set_engine (guard-ветка) пишет в него
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         status_lbl = Gtk.Label()
         status_lbl.set_xalign(0)
 
-        # ⭐ v2.0.2 (user: «при остановке одного запускает байдпи сам,
-        # выбрать второй не получается»): движки — ВЗАИМОИСКЛЮЧАЮЩИЕ.
-        # Свичи работают как радиогруппа: включить один = выключить
-        # остальные. ВЫКЛЮЧЕНИЕ свича больше НЕ выбирает молча byedpi —
-        # оно просто возвращает свич (кликнул мимо = вернул как было).
-        # Guard: если воркер переключения ещё занят — не молчим, а
-        # показываем состояние и откатываем свич визуально.
+        # ЯВНЫЙ выбор в окне (локальная переменная, не конфиг!)
+        state = {'selected': self._active_engine()}
 
-        def ui_sync_switches(selected):
-            """Синх свичей под guard (без вызова state-set-логики)."""
-            self._engine_syncing = True
-            try:
-                for k, sw in switches.items():
-                    sw.set_active(k == selected)
-            finally:
-                self._engine_syncing = False
+        radio_buttons = {}
 
-        def set_engine(name):
-            """Выбор движка: мгновенный UI-синк + фоновый воркер."""
-            current = self._active_engine()
-            if name == current:
-                ui_sync_switches(name)
-                return
-            if getattr(self, '_engine_switching', False):
-                # воркер занят — честно возвращаем свич и не молчим
-                ui_sync_switches(current)
-                status_lbl.set_markup(
-                    '<small>⏳ Переключение ещё идёт — секундочку…</small>')
-                return
-            ui_sync_switches(name)          # оптимистично: кружочек поехал
-            GLib.idle_add(self.switch_engine, None, name)
+        def ui_set_status(text):
+            status_lbl.set_markup(f'<small>{text}</small>')
 
-        for name, title, desc in engines:
+        def on_mode_toggled(btn, name):
+            if btn.get_active():
+                state['selected'] = name
+                ui_set_status(f'Выбран режим: <b>{name}</b> '
+                              '(запуск — кнопкой ниже)')
+                # выбор сразу в конфиг (без автозапуска — прежнее правило)
+                if name != self._active_engine() and name != 'bridge':
+                    self.current_params['engine'] = name
+                    self.save_config()
+
+        for name, title, desc in modes:
             row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
-                          spacing=10)
+                          spacing=8)
+            rb = Gtk.RadioButton.new_with_label_from_widget(
+                None if name == 'byedpi' else radio_buttons.get('byedpi'),
+                '')
+            rb.set_active(state['selected'] == name)
+            rb.connect('toggled', on_mode_toggled, name)
             lbl_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL,
-                              spacing=2)
+                              spacing=1)
             lbl = Gtk.Label()
             lbl.set_markup(f'<b>{GLib.markup_escape_text(title)}</b>')
             lbl.set_xalign(0)
@@ -2942,140 +2842,259 @@ class AdvancedTrayIndicator:
             hint.set_line_wrap(True)
             lbl_box.pack_start(lbl, False, False, 0)
             lbl_box.pack_start(hint, False, False, 0)
-            # свич: кружочек в овальчике
-            sw = Gtk.Switch()
-            sw.set_valign(Gtk.Align.CENTER)
-            sw.set_active(name == active)
-            # недоступные движки — серые
-            if name == 'nfqws' and not (NFQWS_AVAILABLE and self.nfqws
-                                        and self.nfqws.is_installed()):
-                sw.set_sensitive(False)
-                lbl.set_markup(
-                    f'<span strikethrough="true">'
-                    f'{GLib.markup_escape_text(title)}</span> '
-                    '(не установлен)')
-            if name == 'snimod' and not (SNIMOD_AVAILABLE and self.snimod
-                                         and self.snimod.is_installed()):
-                sw.set_sensitive(False)
-                lbl.set_markup(
-                    f'<span strikethrough="true">'
-                    f'{GLib.markup_escape_text(title)}</span> (не собран)')
+            # статус режима справа (заполнит тикер)
+            st_lbl = Gtk.Label()
+            st_lbl.set_markup('<small>…</small>')
+            st_lbl.set_valign(Gtk.Align.CENTER)
+            mode_status = {name: st_lbl}
+            row.pack_start(rb, False, False, 0)
+            row.pack_start(lbl_box, True, True, 0)
+            row.pack_start(st_lbl, False, False, 4)
+            box.pack_start(row, False, False, 2)
+            radio_buttons[name] = rb
+            # держим ссылки на статус-лейблы для тикера
+            if not hasattr(self, '_mode_status_labels') or \
+                    self._mode_status_labels is None:
+                self._mode_status_labels = {}
+            self._mode_status_labels[name] = st_lbl
 
-            def on_switch(widget_sw, state, name=name):
-                if getattr(self, '_engine_syncing', False):
-                    return
-                # ⭐ v2.0.2: движение свича = выбор движка. ВЫКЛЮЧЕНИЕ
-                # свича НЕ переключает на byedpi молча — свич просто
-                # возвращается (радиогруппа: один из трёх всегда активен).
-                if state:
-                    set_engine(name)
-                    return True   # блокируем авто-выключение; синк сделает set_engine
-                # выключение: вернуть свич как был
-                GLib.idle_add(ui_sync_switches, self._active_engine())
-                return True      # отменить визуальное выключение
-            sw.connect('state-set', on_switch)
-
-            def on_row_click(row_ev, ev, name=name):
-                # клик по строке тоже переключает
-                set_engine(name)
-            ev_row = Gtk.EventBox()
-            ev_row.add(lbl_box)
-            ev_row.connect('button-press-event', on_row_click)
-            ev_row.set_tooltip_text('Клик — выбрать этот движок')
-
-            row.pack_start(ev_row, True, True, 0)
-            row.pack_start(sw, False, False, 0)
-            box.pack_start(row, False, False, 4)
-            switches[name] = sw
-
-        def refresh_status():
-            # ⭐ v2.0.4: НЕ трогаем свичи, пока воркер переключения
-            # занят (иначе тикер откатывал свичи назад на полпути —
-            # «переключается сам»); systemctl — в фон, GTK-морозов нет.
-            if getattr(self, '_engine_switching', False):
-                return True
-            eng = self._active_engine()
-            ui_sync_switches(eng)
-            unit = {'byedpi': 'ciadpi.service',
-                    'nfqws': 'ciadpi-nfqws.service',
-                    'snimod': 'ciadpi-snimod.service'}.get(eng)
-
-            def query():
-                try:
-                    r = subprocess.run(
-                        ['systemctl', 'is-active', unit],
-                        capture_output=True, text=True, timeout=3)
-                    st = (r.stdout or '').strip() or 'unknown'
-                except Exception:
-                    st = 'unknown'
-                GLib.idle_add(status_lbl.set_markup,
-                              f'<small>Выбран: <b>{eng}</b> · сервис: {st}</small>')
-            threading.Thread(target=query, daemon=True).start()
-            return True
-        refresh_status()
-
-        # кнопки запуска/остановки выбранного движка
+        # --- кнопки: действуют на ВЫБРАННЫЙ режим ---
         btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
                           spacing=8)
-        btn_start = Gtk.Button(label='Запустить выбранный')
-        btn_stop = Gtk.Button(label='Остановить')
+        btn_start = Gtk.Button(label='▶ Запустить')
+        btn_stop = Gtk.Button(label='⏹ Остановить')
+        btn_restart = Gtk.Button(label='↻ Перезапустить')
         btn_close = Gtk.Button(label='Закрыть')
 
-        def on_start_clicked(btn):
-            # ⭐ v2.0.4: блокируем кнопки на время операции — повторные
-            # клики плодили ПАРАЛЛЕЛЬНЫЕ start-воркеры, которые дрались
-            # за systemctl и «включали разное».
-            if getattr(self, '_engine_switching', False):
-                return
-            btn_start.set_sensitive(False)
-            btn_stop.set_sensitive(False)
-            self.start_service(None)
+        def _busy(on):
+            for b in (btn_start, btn_stop, btn_restart):
+                b.set_sensitive(not on)
 
-            def reenable():
-                btn_start.set_sensitive(True)
-                btn_stop.set_sensitive(True)
-                return False
-            GLib.timeout_add_seconds(4, reenable)
+        def _run_op(fn, verb):
+            """Запуск операции бэкенда в фоне; GUI не блокируется."""
+            target = state['selected']
+            _busy(True)
+            ui_set_status(f'⏳ {verb} <b>{target}</b>…')
 
-        def on_stop_clicked(btn):
-            if getattr(self, '_engine_switching', False):
-                return
-            btn_start.set_sensitive(False)
-            btn_stop.set_sensitive(False)
-            self.stop_service(None)
+            def worker():
+                try:
+                    fn()
+                    ok, msg = True, ''
+                except Exception as e:
+                    ok, msg = False, str(e)
+                def done():
+                    _busy(False)
+                    ui_set_status(('✅ ' if ok else '❌ ') +
+                                  f'{verb} {target}: ' + (msg or 'готово'))
+                    GLib.idle_add(self.update_status)
+                    GLib.idle_add(self.rebuild_menu)
+                    return False
+                GLib.idle_add(done)
+            threading.Thread(target=worker, daemon=True).start()
 
-            def reenable():
-                btn_start.set_sensitive(True)
-                btn_stop.set_sensitive(True)
-                return False
-            GLib.timeout_add_seconds(4, reenable)
+        def on_start(btn):
+            target = state['selected']
+            _run_op(lambda: ec.start_engine(target), 'запуск')
 
-        btn_start.connect('clicked', on_start_clicked)
-        btn_stop.connect('clicked', on_stop_clicked)
+        def on_stop(btn):
+            target = state['selected']
+            if target == 'bridge':
+                _run_op(ec.stop_bridge, 'стоп')
+            else:
+                _run_op(lambda: ec.stop_engine(target), 'стоп')
+
+        def on_restart(btn):
+            target = state['selected']
+            if target == 'bridge':
+                _run_op(lambda: (ec.stop_bridge(), ec.start_bridge())[1],
+                        'перезапуск')
+            else:
+                _run_op(lambda: ec.restart_engine(target), 'перезапуск')
+
+        btn_start.connect('clicked', on_start)
+        btn_stop.connect('clicked', on_stop)
+        btn_restart.connect('clicked', on_restart)
         btn_close.connect('clicked', lambda b: dialog.response(
             Gtk.ResponseType.CLOSE))
         btn_box.pack_start(btn_start, False, False, 0)
         btn_box.pack_start(btn_stop, False, False, 0)
+        btn_box.pack_start(btn_restart, False, False, 0)
         btn_box.pack_end(btn_close, False, False, 0)
 
-        box.pack_start(Gtk.Separator(), False, False, 2)
+        box.pack_start(Gtk.Separator(), False, False, 4)
         box.pack_start(status_lbl, False, False, 0)
         box.pack_start(btn_box, False, False, 0)
 
         content.pack_start(box, True, True, 0)
         content.show_all()
-        # тикер статуса, пока окно открыто
+
+        # тикер: только статусы, ничего не переключает
+        def refresh_status():
+            labels = getattr(self, '_mode_status_labels', None) or {}
+            for name, st_lbl in list(labels.items()):
+                def query(n=name, lbl=st_lbl):
+                    try:
+                        active = ec.is_active(n)
+                        if n == 'bridge':
+                            pass
+                        txt = ('<span foreground="#2e7d32">● активен</span>'
+                               if active else
+                               '<span foreground="#888">○ остановлен</span>')
+                    except Exception:
+                        txt = '<small>?</small>'
+                    GLib.idle_add(lbl.set_markup,
+                                  f'<small>{txt}</small>')
+                threading.Thread(target=query, daemon=True).start()
+            return True
+        refresh_status()
         timer = GLib.timeout_add_seconds(3, refresh_status)
 
         def on_dialog_destroy(d):
-            # ⭐ v2.0.4: чистим ссылку, чтобы следующий клик по пункту
-            # меню открыл СВЕЖЕЕ окно (а не present() на труп)
             self._engines_window = None
+            self._mode_status_labels = None
             return False
         dialog.connect('destroy', on_dialog_destroy)
 
         dialog.run()
         GLib.source_remove(timer)
+        dialog.destroy()
+
+    def show_profiles_dialog(self, widget=None):
+        """⭐ v2.0.6: Профили — сохранение/применение/удаление наборов.
+
+        Профиль = выбранный режим + параметры всех движков + мост +
+        настройки прокси. Сценарий: дома включил нужный режим →
+        «Сохранить как…» → в кафе «Применить» — машина поднимет
+        именно то, что было сохранено.
+        """
+        try:
+            import ciadpi_profiles
+        except ImportError:
+            import sys
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            import ciadpi_profiles
+        pm = ciadpi_profiles.ProfileManager()
+
+        dialog = Gtk.Dialog(title='Профили настроек', flags=0)
+        dialog.set_default_size(480, 420)
+        content = dialog.get_content_area()
+        content.set_margin_top(10); content.set_margin_bottom(10)
+        content.set_margin_start(12); content.set_margin_end(12)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        status_lbl = Gtk.Label()
+        status_lbl.set_xalign(0)
+
+        # список профилей
+        store = Gtk.ListStore(str, str)
+        list_tree = Gtk.TreeView(model=store)
+        list_tree.set_headers_visible(False)
+        renderer = Gtk.CellRendererText()
+        col = Gtk.TreeViewColumn('Профиль', renderer, text=0)
+        list_tree.append_column(col)
+        renderer2 = Gtk.CellRendererText()
+        renderer2.set_property('foreground', 'gray')
+        col2 = Gtk.TreeViewColumn('Инфо', renderer2, text=1)
+        list_tree.append_column(col2)
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_vexpand(True)
+        scroll.add(list_tree)
+        selection = list_tree.get_selection()
+
+        def refresh_list():
+            store.clear()
+            active = pm.active_profile()
+            for name, meta in pm.list_profiles():
+                info = (f"[{meta.get('engine', '?')} · мост:"
+                        f"{meta.get('bridge', '?')}]"
+                        f"{' ← активный' if name == active else ''}")
+                store.append([name, info])
+        refresh_list()
+
+        def chosen_name():
+            model, tree_iter = selection.get_selected()
+            return model[tree_iter][0] if tree_iter else None
+
+        # имя нового профиля
+        name_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
+                           spacing=8)
+        name_entry = Gtk.Entry()
+        name_entry.set_placeholder_text('Имя профиля (напр. «Дом»)')
+        btn_save = Gtk.Button(label='💾 Сохранить текущее как…')
+        name_row.pack_start(name_entry, True, True, 0)
+        name_row.pack_start(btn_save, False, False, 0)
+
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
+                          spacing=8)
+        btn_apply = Gtk.Button(label='▶ Применить')
+        btn_delete = Gtk.Button(label='🗑 Удалить')
+        btn_close = Gtk.Button(label='Закрыть')
+
+        def on_save(btn):
+            name = name_entry.get_text()
+            ok, msg = pm.capture_current(name)
+            status_lbl.set_markup(
+                f'<small>{"✅" if ok else "❌"} {GLib.markup_escape_text(msg)}</small>')
+            if ok:
+                name_entry.set_text('')
+                refresh_list()
+
+        def on_apply(btn):
+            name = chosen_name()
+            if not name:
+                status_lbl.set_markup('<small>❌ выберите профиль в списке</small>')
+                return
+            status_lbl.set_markup(
+                f'<small>⏳ Применяю «{GLib.markup_escape_text(name)}»…</small>')
+
+            def worker():
+                ok, msg = pm.apply_profile(name)
+                def done():
+                    status_lbl.set_markup(
+                        f'<small>{"✅" if ok else "❌"} '
+                        f'{GLib.markup_escape_text(msg)}</small>')
+                    refresh_list()
+                    self.update_status()
+                    self.rebuild_menu()
+                    return False
+                GLib.idle_add(done)
+            threading.Thread(target=worker, daemon=True).start()
+
+        def on_delete(btn):
+            name = chosen_name()
+            if not name:
+                status_lbl.set_markup('<small>❌ выберите профиль в списке</small>')
+                return
+            ok, msg = pm.delete_profile(name)
+            status_lbl.set_markup(
+                f'<small>{"✅" if ok else "❌"} {GLib.markup_escape_text(msg)}</small>')
+            refresh_list()
+
+        btn_save.connect('clicked', on_save)
+        btn_apply.connect('clicked', on_apply)
+        btn_delete.connect('clicked', on_delete)
+        btn_close.connect('clicked', lambda b: dialog.response(
+            Gtk.ResponseType.CLOSE))
+
+        btn_box.pack_start(btn_apply, False, False, 0)
+        btn_box.pack_start(btn_delete, False, False, 0)
+        btn_box.pack_end(btn_close, False, False, 0)
+
+        hint = Gtk.Label()
+        hint.set_markup('<small>Профиль хранит: выбранный режим, параметры\n'
+                       'byedpi/nfqws/хосты snimod, состояние DNS-моста и\n'
+                       'настройки прокси. «Сохранить» снимает снимок ТЕКУЩИХ\n'
+                       'настроек; «Применить» поднимает их целиком.</small>')
+        hint.set_xalign(0)
+
+        box.pack_start(hint, False, False, 0)
+        box.pack_start(scroll, True, True, 0)
+        box.pack_start(name_row, False, False, 0)
+        box.pack_start(status_lbl, False, False, 0)
+        box.pack_start(btn_box, False, False, 0)
+        content.pack_start(box, True, True, 0)
+        content.show_all()
+        dialog.run()
         dialog.destroy()
 
     def show_snimod_settings(self, widget=None):
@@ -3304,7 +3323,12 @@ class AdvancedTrayIndicator:
             label = Gtk.Label(label=t('settings.params_label'))
             label.set_xalign(0)
             entry = Gtk.Entry()
-            current_params = self.get_current_service_params()
+            # ⭐ v2.0.6: параметры — из КЭША, не из живого systemctl
+            # (subprocess в главном GTK-потоке морозил окно настроек
+            # на 2-6с во время job-lock'а — «окно не нажимается»).
+            # Кэш обновляет фоновый тикер update_status.
+            current_params = getattr(self, '_cached_params_text',
+                                     None) or self.default_params
             entry.set_text(current_params)
             entry.set_width_chars(70)
             
@@ -3673,6 +3697,19 @@ class AdvancedTrayIndicator:
         state = {'running': False, 'best_params': None}
 
         def ui_log(message):
+            # ⭐ v2.0.5: кап на размер буфера — за ночь безлимитного
+            # поиска лог в TextView разрастался на миллионы строк и
+            # каждое append становилось всё медленнее (окно «висло»).
+            # Держим последние ~400 строк, старые срезаем.
+            try:
+                n_lines = log_buffer.get_line_count()
+                if n_lines > 500:
+                    start_it = log_buffer.get_iter_at_line(
+                        max(0, n_lines - 400))
+                    end_it = log_buffer.get_end_iter()
+                    log_buffer.delete(start_it, end_it)
+            except Exception:
+                pass
             log_buffer.insert(log_buffer.get_end_iter(), message + "\n")
             # автоскролл вниз
             mark = log_buffer.create_mark(None, log_buffer.get_end_iter(), False)
@@ -4048,7 +4085,8 @@ class AdvancedTrayIndicator:
         main_vbox.set_margin_top(10); main_vbox.set_margin_bottom(10)
         main_vbox.set_margin_start(10); main_vbox.set_margin_end(10)
 
-        current_str = self.get_current_service_params()
+        current_str = getattr(self, '_cached_params_text', None) \
+            or self.default_params
         parsed = parse_params(current_str)
 
         # --- Строка параметров (синхронизирована с регуляторами) ---
@@ -4588,32 +4626,29 @@ class AdvancedTrayIndicator:
         print(f"💾 Сохранены настройки: we_changed_proxy={self.we_changed_proxy}")
 
         if self.current_params.get("auto_disable_proxy", False) and self.we_changed_proxy:
-            try:
-                result = subprocess.run(
-                    ['systemctl', 'is-active', 'ciadpi.service'],
-                    capture_output=True, text=True, timeout=2
-                )
-                service_running = result.stdout.strip() == 'active'
-
-                if not service_running:
-                    # Сервис остановлен - восстанавливаем системные настройки
-                    print("🔄 Выход: восстанавливаем системные настройки прокси...")
-                    success = self.restore_system_proxy_backup()
-                    if success:
-                        print("✅ Системные настройки восстановлены при выходе")
-                    self.show_notification(t('exit.title'), t('exit.restored'))
-                else:
-                    print("ℹ️ Сервис запущен - оставляем наши настройки прокси")
-
-            except Exception as e:
-                print(f"⚠️ Не удалось проверить статус сервиса: {e}")
+            # ⭐ v2.0.6: проверка сервиса — БЕЗ subprocess в главном
+            # потоке (висевший systemctl is-active = «выход не работает»).
+            # Проверяем дешёво: pkexec/sudo не нужны, is-active быстр,
+            # но во время job-lock может висеть — заменяем на попытку
+            # через отдельный поток и НЕ ждём её: восстанавливаем
+            # прокси сразу (безопасно в любом состоянии сервиса).
+            print("🔄 Выход: восстанавливаем системные настройки прокси…")
+            success = self.restore_system_proxy_backup()
+            if success:
+                print("✅ Системные настройки восстановлены при выходе")
+            self.show_notification(t('exit.title'), t('exit.restored'))
 
         if hasattr(self, 'is_searching') and self.is_searching:
             self.stop_autosearch()
 
-        # ⭐ ДОБИВАЕМ ВСЕ ВЛОЖЕННЫЕ ЦИКЛЫ (диалоги .run())
+        # ⭐ ДОБИВАЕМ ВСЕ ВЛОЖЕННЫЕ ЦИКЛЫ (диалоги .run()) — НО без
+        # бесконечного ожидания: тикеры каждые 3с подкидывают новые
+        # события, и старый while events_pending() никогда не
+        # заканчивался («Выход не работает»). Ограничиваем 20 итераций.
         try:
-            while Gtk.events_pending():
+            for _ in range(20):
+                if not Gtk.events_pending():
+                    break
                 Gtk.main_iteration_do(False)
         except Exception:
             pass

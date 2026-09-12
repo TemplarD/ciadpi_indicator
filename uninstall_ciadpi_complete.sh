@@ -109,6 +109,28 @@ stop_services() {
     sudo rm -f /etc/systemd/system/ciadpi-nfqws.service
     log "nfqws-движок вычищен (юнит, nft-таблица inet ciadpi)"
     
+    # ⭐ v2.0.6: snimod-движок №3 + DNS-мост — та же схема:
+    # стоп/disable/снос юнитов + nft-таблицы ciadpi_snimod (иначе
+    # dns_dnat-цепочка оставалась в ruleset и убивала DNS после
+    # «удаления» программы!)
+    for unit in ciadpi-snimod.service ciadpi-dotbridge.service; do
+        if systemctl is-active --quiet "$unit" 2>/dev/null; then
+            sudo systemctl stop "$unit" || warn "Не удалось остановить $unit"
+            log "Сервис $unit остановлен"
+        fi
+        sudo systemctl disable "$unit" 2>/dev/null || true
+        sudo systemctl reset-failed "$unit" 2>/dev/null || true
+        sudo rm -f "/etc/systemd/system/$unit"
+    done
+    sudo nft delete table inet ciadpi_snimod 2>/dev/null || true
+    sudo nft delete table inet ciadpi_bridge 2>/dev/null || true
+    # откат возможного resolv.conf-снапшота
+    if [ -f /etc/resolv.conf.ciadpi-snapshot ]; then
+        sudo cp /etc/resolv.conf.ciadpi-snapshot /etc/resolv.conf 2>/dev/null || true
+        sudo rm -f /etc/resolv.conf.ciadpi-snapshot
+    fi
+    log "snimod-движок и DNS-мост вычищены (юниты, nft, resolv-откат)"
+    
     # Останавливаем systemd сервис
     if systemctl is-active --quiet ciadpi.service 2>/dev/null; then
         sudo systemctl stop ciadpi.service || warn "Не удалось остановить сервис"
@@ -153,8 +175,14 @@ remove_user_files() {
         "ciadpi_texts.py"
         "ciadpi_privileges.sh"
         "ciadpi_nfqws.py"
+        "ciadpi_snimod.py"
+        "ciadpi_dotbridge.py"
+        "ciadpi_enginectl.py"
+        "ciadpi_profiles.py"
         "diagnose_ciadpi.py"
+        "start_ciadpi.sh"
     )
+    rm -rf "$HOME/.local/bin/snimod" 2>/dev/null || true
     
     for script in "${scripts[@]}"; do
         if [ -f "$HOME/.local/bin/$script" ]; then

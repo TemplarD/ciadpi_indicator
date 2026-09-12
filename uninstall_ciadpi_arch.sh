@@ -87,6 +87,24 @@ fi
 sudo nft delete table inet ciadpi 2>/dev/null && log_info "✓ nft table inet ciadpi removed" || true
 sudo rm -f /etc/systemd/system/ciadpi-nfqws.service
 
+# ⭐ v2.0.6: snimod-движок №3 + DNS-мост — вычищаем полностью
+# (юниты, nft-таблицы; dns_dnat-хвост иначе ронял DNS после удаления)
+for unit in ciadpi-snimod.service ciadpi-dotbridge.service; do
+    if systemctl is-active --quiet "$unit" 2>/dev/null; then
+        sudo systemctl stop "$unit" && log_info "✓ $unit stopped"
+    fi
+    sudo systemctl disable "$unit" 2>/dev/null || true
+    sudo systemctl reset-failed "$unit" 2>/dev/null || true
+    sudo rm -f "/etc/systemd/system/$unit"
+done
+sudo nft delete table inet ciadpi_snimod 2>/dev/null && log_info "✓ nft table inet ciadpi_snimod removed" || true
+sudo nft delete table inet ciadpi_bridge 2>/dev/null || true
+if [ -f /etc/resolv.conf.ciadpi-snapshot ]; then
+    sudo cp /etc/resolv.conf.ciadpi-snapshot /etc/resolv.conf 2>/dev/null || true
+    sudo rm -f /etc/resolv.conf.ciadpi-snapshot
+fi
+log_info "✓ snimod engine + DNS bridge cleaned"
+
 # Step 2: Stop and disable SYSTEMD service (system-level, как в v2.1)
 log_step "Step 2/8: Stopping systemd service"
 

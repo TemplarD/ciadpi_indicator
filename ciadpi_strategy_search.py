@@ -56,12 +56,19 @@ class StrategySearcher:
         self.history = self._load_history()
 
         # Логирование в общий каталог конфигов
+        # ⭐ v2.0.5: РОТАЦИЯ. Безлимитный режим «до нахождения» писал в
+        # strategy_search.log МИЛЛИОНЫ строк (288 МБ за сутки) — окно
+        # истории/лога тормозило машину. RotatingFileHandler: 2 МБ на
+        # файл, 2 файла в памяти диска, старое само срезается.
         self.logger = logging.getLogger('ciadpi_strategy')
         if not self.logger.handlers:
             self.logger.setLevel(logging.INFO)
             try:
+                from logging.handlers import RotatingFileHandler
                 self.config_dir.mkdir(exist_ok=True)
-                fh = logging.FileHandler(self.config_dir / 'strategy_search.log', encoding='utf-8')
+                fh = RotatingFileHandler(
+                    self.config_dir / 'strategy_search.log',
+                    maxBytes=2 * 1024 * 1024, backupCount=1, encoding='utf-8')
                 fh.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
                 self.logger.addHandler(fh)
             except Exception:
@@ -550,13 +557,16 @@ class NfqwsStrategySearcher:
         self.stop_requested = False
 
         # Лог — отдельный файл, чтобы не смешивать с byedpi-поиском
+        # ⭐ v2.0.5: ротация и здесь (см. StrategySearcher — 288 МБ лога)
         self.logger = logging.getLogger('ciadpi_nfqws_strategy')
         if not self.logger.handlers:
             self.logger.setLevel(logging.INFO)
             try:
+                from logging.handlers import RotatingFileHandler
                 self.config_dir.mkdir(exist_ok=True)
-                fh = logging.FileHandler(self.config_dir / 'nfqws_strategy.log',
-                                         encoding='utf-8')
+                fh = RotatingFileHandler(
+                    self.config_dir / 'nfqws_strategy.log',
+                    maxBytes=2 * 1024 * 1024, backupCount=1, encoding='utf-8')
                 fh.setFormatter(logging.Formatter(
                     '%(asctime)s - %(levelname)s - %(message)s'))
                 self.logger.addHandler(fh)

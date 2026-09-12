@@ -2,7 +2,7 @@
 # CIADPI Indicator — системный трей для управления byedpi (ciadpi)
 
 pkgname=ciadpi-indicator
-pkgver=2.0.4
+pkgver=2.0.6
 pkgrel=1
 pkgdesc="System tray indicator for CIADPI/byedpi DPI bypass (RU/EN, dual engine: byedpi/nfqws, until-found search)"
 arch=('any')

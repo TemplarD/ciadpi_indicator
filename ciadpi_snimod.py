@@ -154,6 +154,10 @@ table inet {table} {{
         helper = f"""#!/bin/bash
 # CIADPI snimod rules helper (sudo; см. ciadpi_privileges.sh)
 # Идемпотентно: снос таблицы → применение.
+# ⭐ v2.0.5: dns_dnat применяется ТОЛЬКО если на 127.0.0.1:53 кто-то
+# слушает (dotbridge). Мёртвый мост + живой dns_dnat = весь DNS
+# системы уходит в пустоту (чёрная дыра). Если мост не поднялся —
+# цепочку срезаем, обычный DNS прова продолжает работать.
 set -u
 NFT="/usr/sbin/nft"
 NFT_FILE="{self.nft_file}"
@@ -162,7 +166,22 @@ cmd="${{1:-}}"
 case "$cmd" in
   apply)
     "$NFT" delete table inet "$TABLE" 2>/dev/null || true
-    "$NFT" -f "$NFT_FILE"
+    # ждём до 3с, пока dotbridge забиндит :53 (enable --now
+    # возвращается раньше бинда — гонка ExecStartPre vs python)
+    ok=0
+    for i in 1 2 3 4 5 6; do
+        if ss -H -uln 2>/dev/null | grep -qE '127[.]0[.]0[.]1:53([[:space:]]|$)'; then
+            ok=1; break
+        fi
+        sleep 0.5
+    done
+    if [ "$ok" = 1 ]; then
+        "$NFT" -f "$NFT_FILE"
+    else
+        echo "snimod: dotbridge не слушает :53 — dns_dnat срезаем (анти-дыра)" >&2
+        sed -e '/^    chain dns_dnat {{/,/^    }}$/d' "$NFT_FILE" \\
+            | "$NFT" -f /dev/stdin
+    fi
     ;;
   remove)
     "$NFT" delete table inet "$TABLE" 2>/dev/null || true
@@ -181,17 +200,23 @@ esac
     _UNIT_TEMPLATE = """\
 [Unit]
 Description=CIADPI Snimod DPI Bypass (SNI case-mod engine)
-After=network.target
+After=network.target ciadpi-dotbridge.service
 Wants=network.target
+Wants=ciadpi-dotbridge.service
 
 [Service]
 Type=simple
 User=root
 ExecStartPre={helper} apply
-ExecStart={bin} --qnum={qnum} --hosts={hosts}
+ExecStart={bin} --qnum={qnum} --hosts={hosts} --debug
 ExecStopPost={helper} remove
-Restart=on-failure
-RestartSec=5
+# ⭐ v2.0.5: НЕ рестартим по «failure» — SIGKILL-код 137 считался
+# фейлом и systemd САМ поднимал движок после «Остановить».
+# Только явный краш без сигнала (код 4-7) — редкость; лучше ручной
+# рестарт, чем «зомби-самовключение». TimeoutStopSec=10: с новым
+# sigaction-выходом демон умирает мгновенно; 10с — потолок.
+Restart=no
+TimeoutStopSec=10
 TimeoutStartSec=30
 
 [Install]
@@ -276,14 +301,24 @@ WantedBy=multi-user.target
         except Exception as e:
             ok_steps.append(('unit', False))
             print(f"⚠️ dotbridge unit: {e}")
-        # 2) старт моста
+        # 2) старт моста (только если ещё не активен — повторный enable
+        # не должен поднимать ранее остановленный мост)
         try:
             r = _sp.run(['sudo', '-n', self.SYSTEMCTL_BIN, 'daemon-reload'],
                         capture_output=True, timeout=30)
-            r = _sp.run(['sudo', '-n', self.SYSTEMCTL_BIN, 'enable', '--now',
-                         'ciadpi-dotbridge.service'],
-                        capture_output=True, timeout=30)
-            ok_steps.append(('start', r.returncode == 0))
+            r_is_active = _sp.run(
+                ['systemctl', 'is-active', 'ciadpi-dotbridge.service'],
+                capture_output=True, timeout=10)
+            already = (r_is_active.stdout or b'').strip() == b'active' \
+                if isinstance(r_is_active.stdout, bytes) else \
+                (r_is_active.stdout or '').strip() == 'active'
+            if already:
+                ok_steps.append(('start', True))
+            else:
+                r = _sp.run(['sudo', '-n', self.SYSTEMCTL_BIN, 'enable', '--now',
+                             'ciadpi-dotbridge.service'],
+                            capture_output=True, timeout=30)
+                ok_steps.append(('start', r.returncode == 0))
         except Exception as e:
             ok_steps.append(('start', False))
             print(f"⚠️ dotbridge start: {e}")
@@ -401,16 +436,27 @@ WantedBy=multi-user.target
         return False, err or 'service did not start'
 
     def stop(self):
+        # ⭐ v2.0.5: ПОРЯДОК ОСТАНОВКИ. Раньше мост гасился ПЕРВЫМ, а
+        # сервис (со своим ExecStopPost remove таблицы ciadpi_snimod,
+        # где живёт dns_dnat) мог зависнуть на 90с SIGTERM — выходил
+        # период, когда dns_dnat жив, а моста уже нет = ЧЁРНАЯ ДЫРА DNS
+        # (весь интернет умирал, не только ютуб). Теперь: сначала
+        # systemctl stop сервиса (таблица сносится гарантированно),
+        # затем мост. Дополнительно: снос таблицы принудительно, если
+        # сервис её почему-то не убрал.
         ok, err = self._systemctl('stop', self.SERVICE)
-        # ⭐ v2.0.2: мост гасим вместе с движком (resolv.conf откатывается
-        # из снапшота) — интернет возвращается к исходному DNS.
+        # страховка: правила могли остаться (сервис не стартовал,
+        # ExecStopPost не выполнился) — сносим руками
+        try:
+            if self.rules_active():
+                self.remove_rules_fallback()
+        except Exception as e:
+            print(f"⚠️ snimod rules fallback: {e}")
+        # мост гасим ПОСЛЕДНИМ — к этому моменту dns_dnat уже нет
         try:
             self._dns_bridge_disable()
         except Exception as e:
             print(f"⚠️ dotbridge disable: {e}")
-        # страховка: правила могли остаться
-        if not self.rules_active():
-            self.remove_rules_fallback()
         return ok, err
 
     def remove_rules_fallback(self):

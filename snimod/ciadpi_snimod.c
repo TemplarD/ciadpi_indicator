@@ -32,11 +32,32 @@
 static volatile sig_atomic_t g_stop = 0;
 static int g_qnum = DEFAULT_QNUM;
 static int g_debug = 0;
+static volatile int g_qh_fd = -1;   /* fd очереди для самопрерывания */
 
 static char g_hosts[MAX_HOSTS][HOST_LEN + 1];
 static int g_nhosts = 0;
+static FILE *g_pcap = NULL;           /* дамп отредактированных пакетов */
 
-static void on_sig(int sig) { (void)sig; g_stop = 1; }
+/* ⭐ v2.0.5: самопрерывание recv(). glibc signal() ставит SA_RESTART —
+ * SIGTERM прибивал recv() и демон висел 90с до SIGKILL (код 137 =
+ * "failure" для Restart=on-failure → сам "включался обратно"). Теперь
+ * signal-хендлер сам читает из очереди: recv() получает EBADF/EINTR —
+ * цикл видит g_stop и выходит мгновенно. */
+static void on_sig(int sig) {
+    (void)sig;
+    g_stop = 1;
+    /* закрыть очередь — recv() в main() выйдет с ошибкой немедленно */
+    if (g_qh_fd >= 0) {
+        close(g_qh_fd);
+        g_qh_fd = -1;
+    }
+}
+
+/* ⭐ v2.0.5: лог без буферизации — в systemd (pipe) stdout был
+ * block-buffered, debug-строки не доходили до journalctl */
+#define LOGF(...) do { \
+    if (g_debug) { fprintf(stdout, __VA_ARGS__); fflush(stdout); } \
+} while (0)
 
 static void usage(void) {
     fprintf(stderr,
@@ -45,7 +66,8 @@ static void usage(void) {
         "  --qnum=N   NFQUEUE number (default %d)\n"
         "  --hosts=f  hosts file, one lowercase host per line\n"
         "  --debug    log decisions to stdout\n"
-        "  --daemon   fork to background\n",
+        "  --daemon   fork to background\n"
+        "  --pcap=F   dump edited packets to pcap file (debug)\n",
         DEFAULT_QNUM);
     exit(1);
 }
@@ -66,14 +88,20 @@ static void fix_csums(unsigned char *pkt, int len, int ihl) {
     struct iphdr *ip = (struct iphdr *)pkt;
     struct tcphdr *tcp = (struct tcphdr *)(pkt + ihl);
     int tcp_seg_len = len - ihl;
-    /* TCP pseudo-header checksum */
+    /* TCP pseudo-header checksum.
+     * ⭐ v2.0.5: ФИКС — старый код считал в BE-словах, но protocol
+     * и длину сегмента добавлял через htons() (байтообмен на LE —
+     * ошибка в 0x05FA на КАЖДОМ пакете), а итоговые суммы писал
+     * БЕЗ htons(). Все отредактированные пакеты имели битую
+     * контрольную сумму и молча отбрасывались — «ютуб не работает,
+     * хотя движок активен». Сверено с Python-эталоном RFC 1071. */
     unsigned int sum = 0;
     unsigned int src = ntohl(ip->saddr), dst = ntohl(ip->daddr);
     sum += (src >> 16) & 0xFFFF; sum += src & 0xFFFF;
     sum += (dst >> 16) & 0xFFFF; sum += dst & 0xFFFF;
-    sum += htons(IPPROTO_TCP);
-    sum += htons((unsigned short)tcp_seg_len);
-    /* сумма сегмента */
+    sum += IPPROTO_TCP;                             /* BE-слово 0x0006 */
+    sum += (unsigned int)(unsigned short)tcp_seg_len; /* BE-слово = len */
+    /* сумма сегмента (BE-слова, как в in_csum) */
     const unsigned char *t = (const unsigned char *)tcp;
     for (int i = 0; i < tcp_seg_len; i += 2) {
         unsigned int w = ((unsigned int)t[i]) << 8;
@@ -82,15 +110,23 @@ static void fix_csums(unsigned char *pkt, int len, int ihl) {
     }
     while (sum >> 16) sum = (sum & 0xFFFF) + (sum >> 16);
     ip->check = 0;
-    ip->check = in_csum((const unsigned char *)ip, ihl);
+    ip->check = htons(in_csum((const unsigned char *)ip, ihl));
     tcp->check = 0;
-    tcp->check = (unsigned short)(~sum);
+    tcp->check = htons((unsigned short)(~sum));
 }
 
 /* ---------- поиск SNI в TLS ClientHello ----------
  * Возвращает 1 и заполняет sni/sni_len, если в пейлоаде — полный
  * ClientHello с SNI. Частичные (сплит) сегменты не трогаем —
- * их редактировать опасно без реассемблинга. */
+ * их редактировать опасно без реассемблинга.
+ * ⭐ v2.0.5: ФИКС ФОРМАТА. Раньше парсер понимал SNI-extension как
+ * [type=0][len2][name] — но RFC 6066 требует вложенность:
+ *   ext 0x0000: ext_len | ServerNameList_len(2) | type(1)=0 | name_len(2) | name
+ * т.е. 5 байт заголовков до имени (не 7). Старый код читал list_len
+ * как type, а (type,name_len) как name_len — сдвиг на 2 байта,
+ * проверка 7+name_len<=elen фейлилась на КАЖДОМ реальном
+ * ClientHello (проверено на живом CH OpenSSL: ext_len=20, name_len=15,
+ * 7+15=22>20 → false). Движок был слеп с рождения v2.0.2. */
 static int find_sni(const unsigned char *p, int plen,
                     const unsigned char **sni_out, int *sni_len_out) {
     if (plen < 43) return 0;
@@ -115,14 +151,17 @@ static int find_sni(const unsigned char *p, int plen,
         int etype = (ext[eoff] << 8) | ext[eoff + 1];
         int elen  = (ext[eoff + 2] << 8) | ext[eoff + 3];
         if (eoff + 4 + elen > ext_len) break;          /* битая запись */
-        if (etype == 0 && elen >= 5) {                  /* server_name */
-            if (ext[eoff + 4] == 0x00) {                /* type host_name */
-                int name_len = (ext[eoff + 5] << 8) | ext[eoff + 6];
-                if (name_len > 0 && 7 + name_len <= elen) {
-                    *sni_out = ext + eoff + 7;
-                    *sni_len_out = name_len;
-                    return 1;
-                }
+        if (etype == 0 && elen >= 5) {                 /* server_name */
+            /* RFC 6066: [list_len(2)][type(1)=0][name_len(2)][name] */
+            int list_len = (ext[eoff + 4] << 8) | ext[eoff + 5];
+            int ntype    = ext[eoff + 6];
+            int name_len = (ext[eoff + 7] << 8) | ext[eoff + 8];
+            if (ntype == 0 && name_len > 0 &&
+                    2 + 1 + 2 + name_len <= elen &&
+                    list_len >= 1 + 2 + name_len) {
+                *sni_out = ext + eoff + 9;
+                *sni_len_out = name_len;
+                return 1;
             }
         }
         eoff += 4 + elen;
@@ -134,6 +173,7 @@ static int find_sni(const unsigned char *p, int plen,
 static int cb(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
              struct nfq_data *nfa, void *data) {
     (void)nfmsg; (void)data;
+    int edited = 0;                    /* правили пакет в этом cb */
     struct nfqnl_msg_packet_hdr *ph = nfq_get_msg_packet_hdr(nfa);
     if (!ph) return nfq_set_verdict(qh, 0, NF_ACCEPT, 0, NULL);
     int id = ntohl(ph->packet_id);
@@ -188,9 +228,16 @@ static int cb(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
                                         (unsigned char)(c - 32);
                             }
                             fix_csums(pkt, len, ihl);
-                            if (g_debug)
-                                printf("snimod: uppercased SNI len=%d\n",
-                                       sni_len);
+                            LOGF("snimod: uppercased SNI len=%d host=%.*s\n",
+                                 sni_len, sni_len, (const char *)sni);
+                            if (g_pcap) {
+                                /* raw IP-запись: длина + байты */
+                                unsigned int ln = (unsigned int)len;
+                                fwrite(&ln, sizeof(ln), 1, g_pcap);
+                                fwrite(pkt, 1, len, g_pcap);
+                                fflush(g_pcap);
+                            }
+                            edited = 1;
                             break;
                         }
                     }
@@ -198,9 +245,20 @@ static int cb(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
             }
         }
     }
-    /* правили или нет — пакет всегда идёт дальше */
-    return nfq_set_verdict(qh, id, NF_ACCEPT,
-                           len > 0 ? 0 : 0, NULL);
+    /* правили или нет — пакет всегда идёт дальше.
+     * ⭐ v2.0.5: КРИТИЧЕСКИЙ ФИКС — раньше data_len всегда был 0,
+     * ядро отдавало НА ПРОВОД ОРИГИНАЛЬНЫЙ пакет (правки жили только
+     * в нашем userspace-буфере и никогда не покидали демон!).
+     * Отсюда «движок логирует uppercased, а ютуб не работает».
+     * Теперь при правке шлём МОДИФИЦИРОВАННЫЕ данные в вердикте.
+     * ⭐ nfq_set_verdict2 c mark 0x40000000 — как в nfqws: mark
+     * защищает от повторного попадания в очередь (анти-цикл) и
+     * гарантирует, что ядро собирает skb из НАШИХ данных. */
+    if (edited) {
+        return nfq_set_verdict2(qh, id, NF_ACCEPT,
+                                0x40000000U, len, pkt);
+    }
+    return nfq_set_verdict(qh, id, NF_ACCEPT, 0, NULL);
 }
 
 static int load_hosts(const char *path) {
@@ -234,6 +292,10 @@ int main(int argc, char **argv) {
         if (!strncmp(argv[i], "--qnum=", 7)) g_qnum = atoi(argv[i] + 7);
         else if (!strncmp(argv[i], "--hosts=", 8)) hosts_file = argv[i] + 8;
         else if (!strcmp(argv[i], "--debug")) g_debug = 1;
+        else if (!strncmp(argv[i], "--pcap=", 7)) {
+            g_pcap = fopen(argv[i] + 7, "wb");
+            if (!g_pcap) { perror("snimod: pcap open"); return 8; }
+        }
         else if (!strcmp(argv[i], "--daemon")) daemonize = 1;
         else usage();
     }
@@ -244,7 +306,7 @@ int main(int argc, char **argv) {
                     hosts_file);
             return 2;
         }
-        if (g_debug) printf("snimod: %d hosts loaded\n", n);
+        LOGF("snimod: %d hosts loaded\n", n);
     } else {
         fprintf(stderr, "snimod: --hosts is required (nothing to do)\n");
         return 2;
@@ -256,8 +318,15 @@ int main(int argc, char **argv) {
         setsid();
         close(0); close(1); close(2);
     }
-    signal(SIGINT, on_sig);
-    signal(SIGTERM, on_sig);
+    /* ⭐ v2.0.5: sigaction БЕЗ SA_RESTART + самопрерывание recv():
+     * close(fd) прямо в хендлере вышибает recv() из main-цикла —
+     * демон умирает мгновенно, systemd не ждёт 90с до SIGKILL. */
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = on_sig;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGTERM, &sa, NULL);
 
     struct nfq_handle *h = nfq_open();
     if (!h) { fprintf(stderr, "snimod: nfq_open error\n"); return 4; }
@@ -272,10 +341,12 @@ int main(int argc, char **argv) {
         fprintf(stderr, "snimod: nfq_set_mode error\n"); return 7;
     }
     int fd = nfq_fd(h);
+    g_qh_fd = fd;                       /* для самопрерывания */
     char buf[65536] __attribute__((aligned));
     while (!g_stop) {
         int rv = recv(fd, buf, sizeof(buf), 0);
         if (rv < 0) {
+            if (g_stop) break;          /* сигнал закрыл fd — выходим */
             if (errno == EINTR || errno == EAGAIN) continue;
             if (errno == ENOBUFS) { usleep(1000); continue; }
             perror("snimod: recv");
@@ -283,8 +354,9 @@ int main(int argc, char **argv) {
         }
         nfq_handle_packet(h, buf, rv);
     }
+    g_qh_fd = -1;
     nfq_destroy_queue(qh);
     nfq_close(h);
-    if (g_debug) printf("snimod: bye\n");
+    LOGF("snimod: bye\n");
     return 0;
 }

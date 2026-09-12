@@ -376,6 +376,15 @@ install_python_scripts() {
         [ -f "ciadpi_texts.py" ] && cp "ciadpi_texts.py" "$HOME/.local/bin/"        # Тексты справки/о программе
         [ -f "ciadpi_nfqws.py" ] && cp "ciadpi_nfqws.py" "$HOME/.local/bin/"          # nfqws-движок (zapret)
         [ -f "ciadpi_snimod.py" ] && cp "ciadpi_snimod.py" "$HOME/.local/bin/"        # snimod — движок №3 (SNI case-mod)
+        [ -f "ciadpi_dotbridge.py" ] && cp "ciadpi_dotbridge.py" "$HOME/.local/bin/"  # ⭐ v2.0.6: DoT DNS-мост (нужен snimod и мост-режиму)
+        [ -f "ciadpi_enginectl.py" ] && cp "ciadpi_enginectl.py" "$HOME/.local/bin/" # ⭐ v2.0.6: единый бэкенд запуска/остановки
+        [ -f "ciadpi_profiles.py" ] && cp "ciadpi_profiles.py" "$HOME/.local/bin/"  # ⭐ v2.0.6: профили настроек
+        [ -f "diagnose_ciadpi.py" ] && cp "diagnose_ciadpi.py" "$HOME/.local/bin/"   # ⭐ v2.0.6: диагностика
+        # snimod-бинарник (если собран в репо)
+        if [ -f "snimod/bin/ciadpi_snimod" ]; then
+            mkdir -p "$HOME/.local/bin/snimod/bin"
+            cp "snimod/bin/ciadpi_snimod" "$HOME/.local/bin/snimod/bin/"
+        fi
         
     else
         # УДАЛЕННАЯ установка - скачиваем с GitHub
@@ -398,6 +407,10 @@ install_python_scripts() {
         wget -q -O "$HOME/.local/bin/ciadpi_texts.py" "$BASE_URL/ciadpi_texts.py" 2>/dev/null || warn "Help/About texts module not available"
         wget -q -O "$HOME/.local/bin/ciadpi_nfqws.py" "$BASE_URL/ciadpi_nfqws.py" 2>/dev/null || warn "nfqws engine module not available"
         wget -q -O "$HOME/.local/bin/ciadpi_snimod.py" "$BASE_URL/ciadpi_snimod.py" 2>/dev/null || warn "snimod engine module not available"
+        wget -q -O "$HOME/.local/bin/ciadpi_dotbridge.py" "$BASE_URL/ciadpi_dotbridge.py" 2>/dev/null || warn "dotbridge module not available"
+        wget -q -O "$HOME/.local/bin/ciadpi_enginectl.py" "$BASE_URL/ciadpi_enginectl.py" 2>/dev/null || warn "enginectl module not available"
+        wget -q -O "$HOME/.local/bin/ciadpi_profiles.py" "$BASE_URL/ciadpi_profiles.py" 2>/dev/null || warn "profiles module not available"
+        wget -q -O "$HOME/.local/bin/diagnose_ciadpi.py" "$BASE_URL/diagnose_ciadpi.py" 2>/dev/null || warn "diagnose module not available"
     fi
     
     log "Python scripts installed to ~/.local/bin/"
