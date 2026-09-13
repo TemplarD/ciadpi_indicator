@@ -81,6 +81,37 @@ class ModeSettingsWindow:
 
     _instance = None
 
+    # ⭐ v2.0.11: подробные справки для конструкторов snimod/мост
+    HINT_UPSTREAM = (
+        'Upstream — DNS-over-TLS сервер, куда мост шлёт запросы\n'
+        'вместо провайдерского DNS:\n'
+        '  1.1.1.1 — Cloudflare (cloudflare-dns.com), быстрый;\n'
+        '  8.8.8.8 — Google (dns.google);\n'
+        '  9.9.9.9 — Quad9 (dns.quad9.net), фильтрует малварь.\n'
+        'Порт 853 (DoT) шифруется TLS — пров не может подменить\n'
+        'ответы (только совсем заблокировать порт).\n'
+        'Проверить живость: ping 1.1.1.1 и «Search» в этом окне.')
+    HINT_TLSNAME = (
+        'Имя TLS-сертификата (server_hostname) — как мост проверяет\n'
+        'подлинность upstream: сертификат сервера должен быть\n'
+        'выписан на это имя.\n'
+        'Должно СОТВЕТСТВОВАТЬ upstream:\n'
+        '  1.1.1.1 → cloudflare-dns.com\n'
+        '  8.8.8.8 → dns.google\n'
+        '  9.9.9.9 → dns.quad9.net\n'
+        'Несовпадение — мост не стартует (сертификат «чужой»).')
+    HINT_HOSTS = (
+        'Список хостов для SNI case-mod: движок поднимает РЕГИСТР\n'
+        'SNI-имени в TLS ClientHello (www.youtube.com →\n'
+        'WWW.YOUTUBE.COM).\n'
+        'Пров режет по подстроке в нижнем регистре — а серверу\n'
+        'регистр безразличен (RFC 6066), соединение проходит.\n'
+        'Правила:\n'
+        '  • один хост в строке, без https:// и пути;\n'
+        '  • домен 3-го уровня достаточно (youtube.com покроет\n'
+        '    и www.youtube.com — совпадение по подстроке);\n'
+        '  • пустой список = движок пропускает всё как есть.')
+
     def __init__(self, tray):
         self.tray = tray
         self.dialog = None
@@ -91,6 +122,39 @@ class ModeSettingsWindow:
         self.nfqws_builder_cb = None
         # vbox «последних» на вкладке Параметры (для живой перерисовки)
         self._recent_vbox = None
+
+    def _show_tip(self, message):
+        """⭐ v2.0.11: диалог подробной подсказки (кнопки «?» в
+        конструкторах snimod/моста — справка по месту, как у
+        byedpi/nfqws)."""
+        dialog = Gtk.Dialog(title='Подсказка по параметру', flags=0)
+        dialog.add_buttons('ОК', Gtk.ResponseType.OK)
+        dialog.set_default_size(520, 300)
+        content = dialog.get_content_area()
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_vexpand(True)
+        label = Gtk.Label(label=message)
+        label.set_xalign(0)
+        label.set_valign(Gtk.Align.START)
+        label.set_line_wrap(True)
+        label.set_margin_top(10)
+        label.set_margin_bottom(10)
+        label.set_margin_start(12)
+        label.set_margin_end(12)
+        label.set_selectable(True)
+        scrolled.add(label)
+        content.pack_start(scrolled, True, True, 0)
+        content.show_all()
+        dialog.run()
+        dialog.destroy()
+
+    def _q_button(self, message):
+        """Кнопка «?» с подсказкой (для конструкторов моста/snimod)."""
+        btn = Gtk.Button(label='?')
+        btn.set_size_request(28, 28)
+        btn.set_tooltip_text('Подробная подсказка по этому параметру')
+        btn.connect('clicked', lambda b: self._show_tip(message))
+        return btn
 
     # ---------------- публичное API ----------------
 
@@ -360,8 +424,27 @@ class ModeSettingsWindow:
         vbox.show_all()
 
     def _snimod_hosts_widget(self):
-        """Редактор хостов snimod (вместо строки параметров)."""
+        """Редактор хостов snimod (вместо строки параметров).
+
+        ⭐ v2.0.11: справка «?» по месту — как у конструкторов
+        byedpi/nfqws (user: «для новых двух режимов добавим в их
+        небольшой конструктор справку по месту»).
+        """
         frame = Gtk.Frame(label='Хосты SNI case-mod (по одному в строке)')
+        # строка-заголовок с кнопкой «?» справа
+        head_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
+                          spacing=6)
+        head_lbl = Gtk.Label()
+        head_lbl.set_markup('<b>Хосты SNI case-mod</b> '
+                           '<small>(по одному в строке)</small>')
+        head_lbl.set_xalign(0)
+        head_row.pack_start(head_lbl, True, True, 0)
+        head_row.pack_start(self._q_button(self.HINT_HOSTS), False, False, 0)
+        head_row.set_margin_top(4)
+        head_row.set_margin_start(6)
+        head_row.set_margin_end(6)
+        head_row.set_margin_bottom(2)
+
         sw = Gtk.ScrolledWindow()
         sw.set_vexpand(True)
         buf = Gtk.TextBuffer()
@@ -374,11 +457,15 @@ class ModeSettingsWindow:
         buf.set_text('\n'.join(hosts))
         tv = Gtk.TextView(buffer=buf)
         tv.set_monospace(True)
+        tv.set_tooltip_text(
+            'Хосты для SNI case-mod — по одному в строке '
+            '(www.youtube.com станет WWW.YOUTUBE.COM)')
         sw.add(tv)
 
         btn = Gtk.Button(label='Сохранить хосты')
         btn.connect('clicked', lambda b: self._save_snimod_hosts(buf))
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        outer.pack_start(head_row, False, False, 0)
         outer.pack_start(sw, True, True, 0)
         outer.pack_start(btn, False, False, 0)
         frame.add(outer)
@@ -440,6 +527,8 @@ class ModeSettingsWindow:
             '8.8.8.8 (Google), 9.9.9.9 (Quad9)')
         self.bridge_upstream.set_hexpand(True)
         row1.pack_start(lbl1, False, False, 0)
+        # ⭐ v2.0.11: справка «?» по месту (как у byedpi/nfqws)
+        row1.pack_start(self._q_button(self.HINT_UPSTREAM), False, False, 0)
         row1.pack_start(self.bridge_upstream, True, True, 0)
         fbox.pack_start(row1, False, False, 2)
 
@@ -454,6 +543,8 @@ class ModeSettingsWindow:
             'server_hostname для проверки сертификата upstream')
         self.bridge_tlsname.set_hexpand(True)
         row2.pack_start(lbl2, False, False, 0)
+        # ⭐ v2.0.11: справка «?» по месту
+        row2.pack_start(self._q_button(self.HINT_TLSNAME), False, False, 0)
         row2.pack_start(self.bridge_tlsname, True, True, 0)
         fbox.pack_start(row2, False, False, 2)
 

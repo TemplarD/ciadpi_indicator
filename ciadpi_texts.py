@@ -24,145 +24,137 @@ HELP_TEXTS = {
       заблокированных хостов, история 200 прогонов
     • Умный прокси: системный/local-only, бэкап и восстановление
       настроек GNOME, автооткат при остановке/выходе
-    • Обновление byedpi из git без переустановки
+    • Обновление движков из git (byedpi и nfqws) — кнопками в
+      «Настройках приложения», с консольным окном этапов
     • RU/EN локализация, настройки уведомлений по категориям
     • Мониторинг статуса в трее, логи, диагностика (CLI:
       ciadpi_enginectl.py / ciadpi_profiles.py / diagnose_ciadpi.py)
 
-    🛠️ Управление сервисом:
-
-    🛠️ Управление сервисом:
-    • Запуск/остановка/перезапуск сервиса CIADPI
+    🛠️ ОБЩЕЕ УПРАВЛЕНИЕ СЕРВИСОМ:
+    • Запуск/остановка/перезапуск выбранного режима (меню трея
+      и окно «Режимы обхода» — через один бэкенд, без рассинхрона)
     • Мониторинг статуса в реальном времени
     • Проверка параметров перед применением (dry-run бинарником)
 
-    🔌 Умное управление прокси:
+    🧩 РЕЖИМ BYEDPI (SOCKS5-прокси):
     • ciadpi — SOCKS4/5-прокси на 127.0.0.1:1080
-    • Режимы: системный (manual), локальный (не трогает систему)
-    • Резервное копирование и восстановление настроек GNOME
-    • Поддержка белого списка доменов
+    • Обходятся только приложения с настроенным прокси (режим
+      «системный» настраивает GNOME; local — вручную)
+    • Параметры — «🎛 Настройки режима»: строка, конструктор
+      со справками «?», поиск стратегии
+    • Белый список доменов исключает хосты из проксирования
+
+    ⚡ ПАРАМЕТРЫ BYEDPI: ПОЛНЫЙ СПРАВОЧНИК:
+    Полный перечень флагов ciadpi (-T/-A/-L/-s/-d/-o/-q/-f/-r,
+    фильтры, fake-пакеты) — см. секцию «📋 ПАРАМЕТРЫ BYEDPI
+    (СПРАВОЧНИК ФЛАГОВ)» ниже. Это параметры ИМЕННО byedpi;
+    у nfqws — свой формат zapret (см. секцию nfqws).
+
+    🛰️ ПОИСК СТРАТЕГИИ (по режиму):
+    • byedpi тестируется на отдельном порту (интернет не
+      прерывается), nfqws — через реальный сервис (каждая
+      комбинация включается на ~10 секунд)
+    • «Искать до нахождения» отключает лимит попыток: перебор
+      продолжается, пока какая-нибудь комбинация НЕ ОТКРОЕТ ВСЕ
+      указанные URL (частичный доступ успехом не считается)
+    • «Мин. попыток» — нижний предел: даже если все URL открылись
+      на первой комбинации, поиск проверит ещё несколько
+    • Комбинации не кончаются: после известного набора и истории
+      генератор выдаёт новые волны (60/120/180…), без повторов
+    • Найденное — кнопкой «→ в строку параметров»
 
     🎛️ НАСТРОЙКИ РЕЖИМА (v2.0.7+):
-
-    Один пункт меню «🎛 Настройки режима…» — окно с тремя вкладками,
+    Один пункт меню «🎛 Настройки режима» — окно с тремя вкладками,
     содержимое строится под ВЫБРАННЫЙ режим:
-
-    • «Параметры» — ручная строка ввода + дефолт + примеры +
-      4 ПОСЛЕДНИХ использованных (свои для каждого режима,
-      автообновление). Для snimod — редактор списка хостов.
-    • «Конструктор» — компактные регуляторы ключевых флагов
-      (byedpi: -T/-A/-s/-r; nfqws: desync/-split-pos/ttl; мост:
-      upstream DoT-резолвер + TLS-имя). Правки сразу идут в строку.
-    • «Поиск стратегии» — перебор параметров под выбранный режим;
-      найденное — кнопкой «→ в строку параметров».
+    • «Параметры» — ручная строка + дефолт + примеры + 4 последних
+      (свои для каждого режима, автообновление). Для snimod —
+      редактор списка хостов.
+    • «Конструктор» — регуляторы ключевых флагов со справками «?»
+      по каждому (byedpi — полный; nfqws — 7 десинк-полей;
+      snimod — хосты + мост; мост — upstream DoT).
+    • «Поиск стратегии» — перебор параметров под выбранный режим.
 
     🗂 ПРОФИЛИ (v2.0.6+):
-
-    «Профили…» — снимки настроек для разных сетей: выбранный режим,
+    «Профили» — снимки настроек для разных сетей: выбранный режим,
     параметры всех движков, состояние DNS-моста, настройки прокси.
     «Сохранить текущее как…» — снимок; «Применить» — поднимает
-    сохранённое целиком (гасит лишнее, стартует нужное). Для
-    переключения Дом/Кофейня/Работа на ноутбуке.
+    сохранённое целиком (гасит лишнее, стартует нужное).
 
-    ⚡ Оптимизация параметров:
-    • Конструктор с подробными подсказками «?» по каждому параметру
-    • Поиск стратегии перебором (вкладка «Поиск стратегии»)
-    • Готовые проверенные примеры конфигураций
-    • История тестирования
-
-    ♾️ ПОИСК «ДО НАХОЖДЕНИЯ» (v1.7+):
-
-    Чекбокс «Искать до нахождения» в диалоге поиска отключает лимит
-    попыток. Перебор продолжается, пока какая-нибудь комбинация НЕ
-    ОТКРОЕТ ВСЕ указанные URL — частичный доступ (например, google
-    работает, youtube нет) успехом НЕ считается, поиск идёт дальше.
-    Остановить можно кнопкой «Остановить» или закрытием окна.
-
-    «Мин. попыток» — нижний предел: даже если все URL открылись на
-    первой же комбинации, поиск проверит ещё несколько (защита от
-    случайного результата), после предела первый же ПОЛНЫЙ успех
-    останавливает перебор. Итог — самая быстрая комбинация из
-    прошедших все URL.
-
-    Комбинации не кончаются: после известного набора и истории
-    генератор выдаёт новые волны (60/120/180…), без повторов.
-
-    🎛️ ЧЕТЫРЕ РЕЖИМА ОБХОДА (v2.0.8):
-
-    «⚙ Режимы обхода…» — окно с radio-строками, выбор кликом по всей
+    ⚙ РЕЖИМЫ ОБХОДА (ОКНО ПЕРЕКЛЮЧЕНИЯ):
+    «⚙ Режимы обхода» — окно с radio-строками, выбор кликом по всей
     строке, кнопки ▶ Запустить / ⏹ Остановить / ↻ Перезапустить
     действуют на ВЫБРАННЫЙ режим. Повторный запуск активного —
     no-op (не рестарт). Запуск одного режима гасит остальные.
 
-    • byedpi — SOCKS5-прокси 127.0.0.1. Обходится только трафик,
-      явно направленный в прокси. Параметры — «🎛 Настройки режима».
-
-    • nfqws — десинки zapret через NFQUEUE: искажает пакеты ВСЕХ
-      приложений (порты 80/443), настройка приложений не нужна.
-      Самый мощный против SNI/IP-фильтров прова.
-
-    • snimod — наш движок №3: поднимает РЕГИСТР SNI (www.youtube.com
-      → WWW.YOUTUBE.COM). Пров режет по подстроке в нижнем регистре,
-      серверу регистр безразличен (RFC 6066). Хосты — «Настройки
-      режима» → «Параметры».
-
-    • DNS-мост — локальный DoT-резолвер 127.0.0.1:53 → upstream:853
-      (по умолчанию 1.1.1.1; сменить — «Настройки режима» →
-      «Конструктор»). Чинит NXDOMAIN-подмену DNS прова. Работает
-      сам по себе и вместе с любым движком.
-
-    ⭐ Выбор режима сохраняется и НЕ зависит от того, запущен ли
-    сервис. Главное меню «Запустить/Остановить» управляет именно
-    выбранным режимом (включая мост). Смена режима не запускает
-    его автоматически — стартуйте кнопкой или «Запустить».
-
-    ⭐ Выбор движка НЕ зависит от того, запущен ли сервис: остановленный
-    nfqws остаётся выбранным nfqws — меню, «Запустить/Остановить»
-    и статус продолжают управлять именно им. «Остановить сервис»
-    больше НЕ переключает движок, а «Запустить» поднимает выбранный.
-    (В подменю движка две строки: «Выбран: …» и «Сервис: active/inactive».)
-
-    ⭐ Смена движка НЕ запускает его автоматически (v1.9.1): галочка
-    меняет только ВЫБОР (и boot-флаги — на перезагрузке поднимется
-    именно он). Поднять движок — «Запустить сервис» вручную.
-    При уходе на nfqws системный прокси сбрасывается автоматически
-    (nfqws прокси не использует, а manual на мёртвом порте ломает
-    браузеры).
-
-    Движки взаимоисключающие: nfqws перехватил бы и трафик byedpi
-    (двойное искажение ломает соединения). Переключатель сам
-    останавливает другой движок и снимает его настройки.
-
-    При активном nfqws пункты, применимые только к byedpi (настройки
-    параметров, конструктор, прокси, поиск стратегии), скрыты из меню —
-    показываются только пункты активного движка. Параметры nfqws —
-    в «Движок обхода → Параметры nfqws»
-    (формат zapret: --dpi-desync=…, с примерами и проверкой).
-
-    🔍 ПОИСК СТРАТЕГИИ ДЛЯ ЛЮБОГО ДВИЖКА (v1.9+):
-    В диалоге «Поиск стратегии» выберите движок: byedpi тестируется
-    на отдельном порту (интернет не прерывается), nfqws — через
-    реальный сервис (каждая комбинация включается на ~10 секунд;
-    успех = все указанные URL открываются). Для nfqws-режима
-    используется формат zapret, найденные параметры применяются
-    кнопкой «Применить» прямо в nfqws.json + рестарт сервиса.
-
-    ⭐ ГЛАВНЫЙ ПРИНЦИП РАБОТЫ:
-
-    Параметры ДЕСИНХРОНИЗАЦИИ (обхода), указанные ПОСЛЕ -A,
-    применяются ТОЛЬКО при признаках блокировки (сброс соединения,
-    таймаут, ошибка TLS). Обычные сайты проходят через прокси
-    БЕЗ ИСКАЖЕНИЙ. Поэтому правильный шаблон:
-
+    🟢 РЕЖИМ: BYEDPI — ПОДРОБНО:
+    byedpi — SOCKS5-прокси 127.0.0.1. Обходится только трафик,
+    явно направленный в прокси. Параметры — «🎛 Настройки режима».
+    Главный принцип: параметры ДЕСИНХРОНИЗАЦИИ после -A применяются
+    ТОЛЬКО при признаках блокировки (сброс, таймаут, ошибка TLS);
+    обычные сайты проходят через прокси БЕЗ ИСКАЖЕНИЙ:
         -T3 -A torst -o1 -o25+s -r 1+s
         └─┬─┘ └──┬───┘ └──────┬──────┘
         таймаут триггер   методы обхода
                       (только при блокировке!)
+    Методы, стоящие ДО -A, применяются ко ВСЕМ соединениям и часто
+    ломают незаблокированные сайты.
 
-    Методы, стоящие ДО -A, применяются ко ВСЕМ соединениям
-    без разбора и часто ломают незаблокированные сайты.
+    🟠 РЕЖИМ: NFQWS — ПОДРОБНО:
+    nfqws — десинки zapret через NFQUEUE: искажает пакеты ВСЕХ
+    приложений (порты 80/443), настройка приложений не нужна.
+    Самый мощный против SNI/IP-фильтров прова. Параметры — формат
+    zapret (--dpi-desync=…, --filter-tcp=…): строка ввода,
+    конструктор 7 полей, поиск стратегии. Примеры:
+    • --filter-tcp=80,443 --dpi-desync=disorder2 --dpi-desync-split-pos=1
+    • --filter-tcp=443 --dpi-desync=multidisorder --dpi-desync-split-pos=midsld+1,midsld-1
+    • --filter-tcp=80,443 --dpi-desync=fake,split2 --dpi-desync-fake-tls=1
 
-    📋 ПАРАМЕТРЫ CIADPI (ОСНОВНЫЕ):
+    🟣 РЕЖИМ: SNIMOD — ПОДРОБНО:
+    snimod — наш движок №3: поднимает РЕГИСТР SNI (www.youtube.com
+    → WWW.YOUTUBE.COM). Пров режет по подстроке в нижнем регистре,
+    серверу регистр безразличен (RFC 6066). Хосты — «Настройки
+    режима» → «Параметры» (список, по одному в строке). snimod
+    поднимает DNS-мост как свою часть (Wants=).
+
+    🔵 РЕЖИМ: DNS-МОСТ (DoT) — ПОДРОБНО:
+    Локальный DoT-резолвер 127.0.0.1:53 → upstream:853 (по
+    умолчанию 1.1.1.1; сменить — «Настройки режима» →
+    «Конструктор»). Чинит NXDOMAIN-подмену DNS прова. Работает
+    сам по себе и вместе с любым движком.
+
+    ⭐ ВЫБОР РЕЖИМА И СЕРВИС:
+    Выбор режима НЕ зависит от того, запущен ли сервис: останов
+    не сбрасывает выбранный режим, меню продолжает управлять
+    именно им. Смена режима НЕ запускает его автоматически —
+    стартуйте кнопкой в окне «Режимы обхода» или пунктом меню.
+    Движки взаимоисключающие: nfqws перехватил бы и трафик byedpi
+    (двойное искажение ломает соединения) — переключение само
+    останавливает другой движок и снимает его настройки.
+
+    🔌 ПРОКСИ: ДЛЯ КАКИХ РЕЖИМОВ НУЖЕН:
+    • byedpi — прокси ОБЯЗАТЕЛЕН: это SOCKS5-прокси, без
+      направления трафика в него обход не работает. Режим
+      «системный» прописывает 127.0.0.1:1080 в GNOME (с бэкапом
+      и автооткатом), «локальный» — приложения настраиваются
+      вручную (браузер: FoxyProxy и т.п.).
+    • nfqws — прокси НЕ НУЖЕН: движок перехватывает пакеты всех
+      приложений на уровне ядра (NFQUEUE). При уходе на nfqws
+      системный прокси сбрасывается автоматически (manual на
+      мёртвом порте ломал бы браузеры).
+    • snimod — прокси НЕ НУЖЕН: та же механика NFQUEUE, пакеты
+      правятся на лету; приложения ни о чём не знают.
+    • DNS-мост — прокси НЕ НУЖЕН: правится только DNS-трафик
+      (UDP53 → DoT-853), страницы открываются напрямую.
+    Белый список исключает домены из проксирования (byedpi).
+
+    ⬆️ ОБНОВЛЕНИЕ ДВИЖКОВ (v2.0.11):
+    Две кнопки в «Настройках приложения» — «Обновить byedpi» и
+    «Обновить nfqws (запрет)». Каждое обновление открывает
+    консольное окно с этапами и командами (git pull → make →
+    рестарт), по завершении ждёт нажатия «Закрыть». Откат
+    бинарника выполняется автоматически, если сервис не поднялся.
+
+    📋 ПАРАМЕТРЫ BYEDPI (СПРАВОЧНИК ФЛАГОВ):
 
     -i IP        IP прослушивания (по умолчанию 0.0.0.0 — все)
     -p PORT      порт локального SOCKS-прокси (по умолчанию 1080)
@@ -238,112 +230,108 @@ HELP_TEXTS = {
     💡 СОВЕТЫ:
     • Если сайты перестали открываться — проверьте лог: «unreach ip»
       значит провайдер отбивает OOB-пакеты, уберите -oN-методы
-    • Конструктор (меню «Конструктор») правит каждый параметр
-      отдельно, со справкой «?» по каждому
+    • Конструктор правит каждый параметр отдельно, со справкой «?»
     • Поиск стратегии подбирает параметры автоматически
-    • Белый список исключает домены из проксирования
-    • Обновляйте byedpi через меню при выходе новых версий
+    • Обновляйте движки кнопками в «Настройках приложения»
 ''',
     'en': '''📚 CIADPI Advanced Indicator — Full Reference
 
-    🎯 CORE FEATURES:
+    🎯 CORE FEATURES (full list):
 
-    🛠️ Service control:
-    • Start/stop/restart of the CIADPI service
+    • FOUR bypass modes: byedpi (SOCKS5), nfqws (zapret desyncs),
+      snimod (our SNI case-mod), DNS bridge (DoT)
+    • Mode window: radio rows (click anywhere), Start/Stop/Restart
+      act on the SELECTED mode, re-start of active = no-op
+    • Mode settings: Parameters / Builder (with "?" hints) /
+      Strategy search — built for the selected mode
+    • Profiles: snapshots "mode+params+bridge+proxy" under a name,
+      one-click apply for different networks/places
+    • Whitelist: exclusion from proxy (byedpi) and from DPI
+      bypass (nfqws: nft-set, domains resolved automatically)
+    • Strategy search: limited or until-found, DoH resolving,
+      200-run history
+    • Smart proxy: system/local-only, GNOME backup & restore
+    • Engine updates from git (byedpi and nfqws) — buttons in
+      Application Settings, with a console window of stages
+    • RU/EN localization, per-category notifications
+    • Tray status, logs, diagnostics (CLI: ciadpi_enginectl.py)
+
+    🛠️ SERVICE CONTROL (COMMON):
+    • Start/stop/restart of the selected mode (tray menu and the
+      Mode window go through one backend — never out of sync)
     • Real-time status monitoring
     • Parameter validation before applying (binary dry-run)
 
-    🔌 Smart proxy management:
-    • ciadpi is a SOCKS4/5 proxy at 127.0.0.1:1080
-    • Modes: system (manual), local (system untouched)
-    • Backup and restore of GNOME proxy settings
-    • Domain whitelist support
-
-    ⚡ Parameter tuning:
-    • Builder with detailed "?" hints for every parameter
-    • Brute-force strategy search (menu "Strategy search")
-    • Ready-made verified configuration examples
-    • Test history
-
-    ♾️ UNTIL-FOUND SEARCH (v1.7+):
-
-    The "Search until found" checkbox removes the attempt limit.
-    The search keeps going until a combination opens ALL listed URLs —
-    partial access (e.g. google works, youtube does not) does NOT
-    count as success and the search continues. Stop it with the
-    "Stop" button or by closing the window.
-
-    "Min attempts" is a floor: even if all URLs open on the very
-    first combination, a few more are checked (protection against a
-    fluke); after the floor the first FULL success stops the search.
-    The result is the fastest combination that passed every URL.
-
-    Combinations never run out: after the known set and history the
-    generator produces new waves (60/120/180...), no repeats.
-
-    🎛️ FOUR BYPASS MODES (v2.0.8):
-
-    "⚙ Bypass modes…" opens the mode window: radio rows (click
-    anywhere on the row), buttons Start/Stop/Restart act on the
-    SELECTED mode. Starting one mode stops the others; re-starting
-    an active mode is a no-op.
-
-    • byedpi — SOCKS5 proxy on 127.0.0.1; only proxied apps are
-      bypassed. Tuning — "🎛 Mode settings".
-
-    • nfqws — zapret desyncs via NFQUEUE: distorts packets of ALL
-      applications (ports 80/443), zero app configuration. The most
-      powerful against SNI/IP filters.
-
-    • snimod — our engine #3: uppercases the SNI (www.youtube.com →
-      WWW.YOUTUBE.COM). Hosts — "Mode settings" → "Parameters".
-
-    • DNS bridge — local DoT resolver 127.0.0.1:53 → upstream:853
-      (default 1.1.1.1; change in "Mode settings" → "Builder").
-      Fixes provider NXDOMAIN spoofing. Works standalone and
-      alongside any engine.
-
-    ⭐ The engine choice does NOT depend on whether the service is
-    running: a stopped nfqws remains the selected engine — the menu,
-    Start/Stop and the status keep controlling IT. "Stop service" no
-    longer switches the engine, and "Start" brings up the selected
-    one. (The engine submenu shows two lines: "Selected: ..." and
-    "Service: active/inactive".)
-
-    The engines are mutually exclusive: nfqws would also intercept
-    byedpi's traffic (double distortion breaks connections). The
-    switch stops the other engine and removes its settings itself.
-
-    While nfqws is active, byedpi-only menu items (parameter
-    settings, builder, proxy, strategy search) are hidden from
-    the menu — only the active engine's items are shown.
-    nfqws parameters live in "Bypass engine → nfqws parameters"
-    (zapret format: --dpi-desync=..., with examples and validation).
-
-    🔍 STRATEGY SEARCH FOR EITHER ENGINE (v1.9+):
-    In the "Strategy search" dialog pick the engine: byedpi is tested
-    on a separate port (internet is not interrupted), nfqws — through
-    the real service (each combo runs for ~10 seconds; success = all
-    listed URLs open). nfqws mode uses the zapret format; found
-    parameters are applied by the "Apply" button straight into
-    nfqws.json + a service restart.
-
-    ⭐ THE KEY OPERATING PRINCIPLE:
-
-    Desync (bypass) parameters placed AFTER -A apply ONLY when
-    blocking is detected (connection reset, timeout, TLS error).
-    Regular sites pass through the proxy UNTOUCHED. Hence the
-    correct template:
-
+    🟢 MODE: BYEDPI — DETAILS:
+    byedpi is a SOCKS5 proxy at 127.0.0.1:1080; only proxied apps
+    are bypassed. Key principle: desync parameters placed AFTER -A
+    apply ONLY when blocking is detected; regular sites pass
+    through the proxy untouched:
         -T3 -A torst -o1 -o25+s -r 1+s
         └─┬─┘ └──┬───┘ └──────┬──────┘
         timeout trigger   bypass methods
                     (only when blocked!)
+    Methods before -A apply to every connection and often break
+    unblocked sites.
 
-    Methods placed BEFORE -A apply to EVERY connection
-    indiscriminately and often break unblocked sites.
+    🟠 MODE: NFQWS — DETAILS:
+    nfqws — zapret desyncs via NFQUEUE: distorts packets of ALL
+    applications (ports 80/443), zero app configuration. The most
+    powerful against SNI/IP filters. Parameters use the zapret
+    format (--dpi-desync=…, --filter-tcp=…): entry line, 7-field
+    builder, strategy search.
 
-    📋 CIADPI PARAMETERS (MAIN):
+    🟣 MODE: SNIMOD — DETAILS:
+    Our engine #3: uppercases the SNI (www.youtube.com →
+    WWW.YOUTUBE.COM). Hosts — "Mode settings" → "Parameters".
+    snimod brings up the DNS bridge as its part (Wants=).
+
+    🔵 MODE: DNS BRIDGE (DoT) — DETAILS:
+    Local DoT resolver 127.0.0.1:53 → upstream:853 (default
+    1.1.1.1; change in "Mode settings" → "Builder"). Fixes provider
+    NXDOMAIN spoofing. Works standalone and alongside any engine.
+
+    ⭐ MODE CHOICE AND SERVICE:
+    The mode choice does NOT depend on whether the service runs:
+    stopping does not reset the selected mode. Switching does NOT
+    auto-start — press Start in the Mode window. Engines are
+    mutually exclusive (double distortion breaks connections);
+    switching stops the other engine itself.
+
+    🛰️ STRATEGY SEARCH (per mode):
+    byedpi is tested on a separate port (internet not interrupted),
+    nfqws — through the real service (each combo ~10 seconds).
+    "Until found" removes the limit: the search continues until a
+    combination opens ALL listed URLs; partial access does not
+    count. "Min attempts" is a floor against a fluke. Combinations
+    never run out: new waves (60/120/180…) keep coming.
+
+    🧩 MODES WINDOW / PROFILES / WHITELIST:
+    • Mode window — radio rows, buttons act on the selected mode
+    • Profiles — snapshots for different networks, one-click apply
+    • Whitelist excludes domains from proxying (byedpi)
+
+    🔌 PROXY: WHICH MODES NEED IT:
+    • byedpi — proxy REQUIRED: it IS a SOCKS5 proxy; without
+      directing traffic into it nothing is bypassed. "System" mode
+      sets 127.0.0.1:1080 in GNOME (backup + auto-rollback),
+      "local" — configure apps manually (browser: FoxyProxy etc.)
+    • nfqws — proxy NOT needed: packets are intercepted at the
+      kernel level (NFQUEUE). Switching to nfqws resets the
+      system proxy automatically.
+    • snimod — proxy NOT needed: same NFQUEUE mechanics, packets
+      are patched on the fly.
+    • DNS bridge — proxy NOT needed: only DNS traffic is fixed
+      (UDP53 → DoT-853), pages open directly.
+
+    ⬆️ ENGINE UPDATES (v2.0.11):
+    Two buttons in Application Settings — "Update byedpi" and
+    "Update nfqws (zapret)". Each opens a console window with
+    stages and commands (git pull → make → service restart) and
+    waits for "Close" when finished. Binary rollback is automatic
+    if the service fails to start.
+
+    📋 BYEDPI PARAMETERS (FLAG REFERENCE):
 
     -i IP        listening IP (default 0.0.0.0 — all)
     -p PORT      local SOCKS proxy port (default 1080)
@@ -419,11 +407,9 @@ HELP_TEXTS = {
     💡 TIPS:
     • If sites stopped opening — check the log: "unreach ip"
       means the ISP rejects OOB packets, remove the -oN methods
-    • The Builder menu edits each parameter separately,
-      with a "?" reference for each
+    • The Builder edits each parameter separately, with a "?"
     • Strategy search picks parameters automatically
-    • The whitelist excludes domains from proxying
-    • Update byedpi from the menu when new versions come out
+    • Update the engines with buttons in Application Settings
 ''',
 }
 
@@ -462,7 +448,7 @@ HELP_SECTIONS = {
 
 
 ABOUT_TEXTS = {
-    'ru': """🔰 CIADPI Advanced Indicator v2.0.10
+'ru': """🔰 CIADPI Advanced Indicator v2.0.11
 
     📡 Продвинутый индикатор для управления сервисом обхода DPI
 
@@ -497,7 +483,7 @@ ABOUT_TEXTS = {
 
     💻 РАЗРАБОТЧИК: Templard
 """,
-    'en': """🔰 CIADPI Advanced Indicator v2.0.10
+    'en': """🔰 CIADPI Advanced Indicator v2.0.11
 
     📡 Advanced tray indicator for managing a DPI bypass service
 

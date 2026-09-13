@@ -15,7 +15,7 @@ from typing import Tuple, List, Dict
 
 gi.require_version('Gtk', '3.0')
 gi.require_version('AppIndicator3', '0.1')
-from gi.repository import Gtk, Gdk, AppIndicator3, GLib
+from gi.repository import Gtk, Gdk, AppIndicator3, GLib, Pango
 
 # Пути к модулям: папка скрипта + ~/.local/bin (для установленной копии)
 sys.path.append(str(Path(__file__).resolve().parent))
@@ -1233,7 +1233,10 @@ class AdvancedTrayIndicator:
         # (по режиму). Старые раздельные пункты (Настройки, Конструктор,
         # параметры nfqws/snimod, Поиск стратегии) — выпилены отсюда:
         # всё внутри окна.
-        mode_settings_item = Gtk.MenuItem(label='🎛 Настройки режима…')
+        # ⭐ v2.0.11 (user: «в главном меню уберём лишние многоточия»):
+        # пункт открывает ОКНО, а не диалог выбора — многоточие тут
+        # лишний шум, убрано.
+        mode_settings_item = Gtk.MenuItem(label='🎛 Настройки режима')
         mode_settings_item.connect("activate",
                                    self.show_mode_settings)
         menu.append(mode_settings_item)
@@ -1245,14 +1248,14 @@ class AdvancedTrayIndicator:
         # НАСТОЯЩИМИ Gtk.Switch — кружочек в овальчике, переключение
         # без закрытия, статус обновляется живьём. Текст пункта
         # показывает текущий выбор.
-        engines_item = Gtk.MenuItem(label='⚙ Режимы обхода…')
+        engines_item = Gtk.MenuItem(label='⚙ Режимы обхода')
         engine_names = {'byedpi': 'byedpi (SOCKS)',
                         'nfqws': 'nfqws (NFQUEUE)',
                         'snimod': 'snimod (SNI case-mod)',
                         'bridge': 'DNS-мост (DoT)'}
         eng_now = self._active_engine()
         engines_item.set_label(
-            f"⚙ Режимы обхода…  [выбран: "
+            f"⚙ Режимы обхода  [выбран: "
             f"{engine_names.get(eng_now, eng_now)}]")
         engines_item.set_tooltip_text(
             'Окно с переключателями-свичами: byedpi ↔ nfqws ↔ snimod')
@@ -1290,7 +1293,7 @@ class AdvancedTrayIndicator:
         # для разных сетей (user: «переключаться между профилями»)
         try:
             import ciadpi_profiles  # noqa: F401
-            profiles_item = Gtk.MenuItem(label='🗂 Профили…')
+            profiles_item = Gtk.MenuItem(label='🗂 Профили')
             profiles_item.connect("activate", self.show_profiles_dialog)
             menu.append(profiles_item)
         except ImportError:
@@ -1305,14 +1308,12 @@ class AdvancedTrayIndicator:
         menu.append(Gtk.SeparatorMenuItem())
 
         # ⭐ v2.0.7: автопоиск/история/поиск стратегии переехали
-        # в «🎛 Настройки режима…» (вкладка «Поиск стратегии», работает
-        # под выбранный режим). Обновление byedpi — общее, остаётся.
-
-        # Обновление byedpi без переустановки — byedpi-пункт
-        if not engine_is_nfqws:
-            byedpi_update_item = Gtk.MenuItem(label=t('menu.byedpi_update'))
-            byedpi_update_item.connect("activate", self.update_byedpi)
-            menu.append(byedpi_update_item)
+        # в «🎛 Настройки режима» (вкладка «Поиск стратегии», работает
+        # под выбранный режим).
+        # ⭐ v2.0.11 (user: «кнопку обновить byedpi поместим в окно
+        # настроек приложения» — и добавим вторую, для zapret):
+        # пункт меню обновления удалён — обе кнопки теперь в
+        # «Настройки приложения», с консольным окном этапов.
 
         # Одноразовая настройка беспарольного доступа
         privileges_item = Gtk.MenuItem(label=t('menu.privileges'))
@@ -1425,7 +1426,7 @@ class AdvancedTrayIndicator:
             if item is not None:
                 try:
                     item.set_label(
-                        f"⚙ Движки обхода…  [выбран: "
+                        f"⚙ Режимы обхода  [выбран: "
                         f"{names.get(engine, engine)}]")
                 except Exception:
                     pass
@@ -2764,7 +2765,92 @@ class AdvancedTrayIndicator:
             parse=parse_params, update=update_param_in_string)
 
     def _build_nfqws_builder_widget(self):
-        """Компактный конструктор nfqws (ключевые десинк-опции)."""
+        """⭐ v2.0.11: конструктор nfqws со справками «?» — как у byedpi.
+
+        Каждое из 7 полей получает кнопку «?» с подробной
+        подсказкой (как в полном конструкторе byedpi), плюс
+        краткий tooltip на самом виджете.
+        """
+        # подробные подсказки по полям (кнопка «?»)
+        nfq_hints = {
+            '--dpi-desync': (
+                'Метод десинка — КАК искажаем пакеты, чтобы DPI\n'
+                'прова потерял синхронизацию:\n'
+                '  none — не искажать (только фильтры);\n'
+                '  disorder — разрезать и отправить части в\n'
+                '            обратном порядке;\n'
+                '  disorder2 — то же, но части не «в рукопожатии»;\n'
+                '  split — разрезать TCP-поток на позиции;\n'
+                '  split2 — split без второго SYN-ACK;\n'
+                '  fake — поддельный ClientHello перед настоящим;\n'
+                '  fake,split2 / fake,disorder2 — комбинации;\n'
+                '  multisplit — несколько разрезов сразу;\n'
+                '  multidisorder — disorder по нескольким позициям.\n'
+                'Универсального нет: проводу подходит одно,\n'
+                'другому — другое. Ищи «Поиском стратегии».'),
+            '--dpi-desync-split-pos': (
+                'Позиция разреза (split/disorder): на каком байте\n'
+                'пакета резать поток. Цифра — байт от начала данных;\n'
+                'значения с суффиксами: midsld — середина серверного\n'
+                'hello домена, +N/-N — сдвиг от неё.\n'
+                'Классика против SNI-фильтров: 1 (в самом начале\n'
+                'TLS-записи) или midsld+1 (внутри SNI-домена).\n'
+                'Несколько позиций через запятую (для multisplit).'),
+            '--dpi-desync-split-seqovl': (
+                'Перекрытие sequence-номеров (seqovl) при split:\n'
+                'сколько байтов «наслаиваются» при пересборке.\n'
+                'Помогает, когда пров собирает поток обратно и\n'
+                'надо чтобы пересборка была неоднозначной.\n'
+                '0 — выключено; обычно 1–8.'),
+            '--dpi-desync-ttl': (
+                'TTL поддельного (fake) пакета: подделка умирает\n'
+                'на маршрутизаторе прова (не доходит до сервера),\n'
+                'но DPI успевает её увидеть и «довольствуется».\n'
+                'Значение — на 1 больше числа хопов до фильтра\n'
+                'прова (обычно 1–12; узнай трассировкой:\n'
+                'traceroute сайт). Слишком большой — фейк дойдёт\n'
+                'до сервера и сломает соединение.'),
+            '--dpi-desync-autottl': (
+                'Авто-TTL: nfqws сам определяет расстояние до\n'
+                'фильтра и подбирает TTL фейка.\n'
+                '  0 — выключено (по умолчанию);\n'
+                '  1 — включить авто-подбор.\n'
+                'Удобно, если не хочешь считать traceroute; но\n'
+                'иногда ручной TTL работает стабильнее.'),
+            '--dpi-desync-fake-tls': (
+                'Тип fake-пакета для TLS (443):\n'
+                '  0 — не использовать (для не-TLS);\n'
+                '  1 — fake = правдоподобный TLS ClientHello\n'
+                '      (обманывает DPI, который ждёт « handshake»);\n'
+                '  2 — урезанный ClientHello.\n'
+                'Работает в паре с --dpi-desync=fake…,\n'
+                'TTL подделки — --dpi-desync-ttl.'),
+            '--dpi-desync-fooling': (
+                'Фулинг — как обмануть проверку контрольных сумм и\n'
+                'последовательностей, чтобы DPI не отбраковал фейк:\n'
+                '  badsum — неверная TCP-сумма: фейк отбрасывают\n'
+                '           все, кроме DPI (пров пропускает);\n'
+                '  md5sig — TCP MD5 signature (не все ОС)\n'
+                '  badseq — неверный sequence: NAT/DPI игнорируют;\n'
+                '  datanoack / hopbyhop — тонкости IP.\n'
+                'Несколько через запятую. badsum — самый частый.\n'
+                '⚠️ На некоторых провах ломает соединения — если\n'
+                'сайты умерли, попробуй убрать.'),
+            '--dpi-desync-split-seqovl2': (
+                'Перекрытие seq для второго сегмента split2 —\n'
+                'используется вместе с seqovl.'),
+        }
+        # краткие подписи (tooltip на виджете)
+        nfq_short = {
+            '--dpi-desync': 'Метод искажения пакетов (нет/universal: disorder/split/fake/multisplit…)',
+            '--dpi-desync-split-pos': 'Позиция разреза (байт от начала; midsld±N — от середины SNI)',
+            '--dpi-desync-split-seqovl': 'Перекрытие sequence при split (0 = выкл)',
+            '--dpi-desync-ttl': 'TTL fake-пакета (умирает на фильтре прова)',
+            '--dpi-desync-autottl': 'Авто-подбор TTL фейка (1 = вкл)',
+            '--dpi-desync-fake-tls': 'Fake-пакет = TLS ClientHello (1 = да)',
+            '--dpi-desync-fooling': 'Фулинг: badsum/md5sig/badseq (через запятую)',
+        }
+
         def parse_nfqws(s):
             out = {}
             for tok in (s or '').split():
@@ -2793,10 +2879,18 @@ class AdvancedTrayIndicator:
                 ('--dpi-desync-fooling', 'Фулинг (badsum/md5sig/badseq…)',
                  None, None, None),
             ],
-            parse=parse_nfqws, update=update_nfqws)
+            parse=parse_nfqws, update=update_nfqws,
+            hints=nfq_hints, hints_short=nfq_short)
 
-    def _build_simple_builder(self, fields, parse, update):
-        """Простой регулятор-виджет: spin/entry на поле + live-строка."""
+    def _build_simple_builder(self, fields, parse, update,
+                              hints=None, hints_short=None):
+        """Простой регулятор-виджет: spin/entry на поле + live-строка.
+
+        ⭐ v2.0.11 (user: «в конструкторе режима запрет нету справки
+        как у byedpi — сделаем таким же удобным»): hints — dict
+        «ключ → подробная подсказка» для кнопки «?» (как в полном
+        конструкторе byedpi), hints_short — краткие tooltip.
+        """
         try:
             import ciadpi_mode_settings as _ms
         except ImportError:
@@ -2822,11 +2916,24 @@ class AdvancedTrayIndicator:
                               spacing=6)
             lbl = _ms.Gtk.Label(label=title)
             lbl.set_xalign(0)
+            lbl.set_tooltip_text((hints_short or {}).get(key, title))
             row.pack_start(lbl, False, False, 0)
+            # ⭐ «?» — подробная подсказка по полю (кнопка, как у
+            # полного byedpi-конструктора)
+            if hints and key in hints:
+                q_btn = _ms.Gtk.Button(label='?')
+                q_btn.set_size_request(28, 28)
+                q_btn.set_tooltip_text(
+                    'Подробная подсказка по этому параметру')
+                q_btn.connect(
+                    'clicked',
+                    lambda b, msg=hints[key]: self._show_param_tip(msg))
+                row.pack_start(q_btn, False, False, 0)
             if lo is None:
                 ent = _ms.Gtk.Entry()
                 ent.set_text(str(parsed.get(key, '') or ''))
                 ent.set_hexpand(True)
+                ent.set_tooltip_text((hints_short or {}).get(key, title))
                 ent.connect('changed',
                             lambda e, k=key: on_field_change(k, e.get_text()))
                 row.pack_start(ent, True, True, 0)
@@ -2836,6 +2943,7 @@ class AdvancedTrayIndicator:
                     sp.set_value(float(parsed.get(key) or lo))
                 except Exception:
                     sp.set_value(lo)
+                sp.set_tooltip_text((hints_short or {}).get(key, title))
                 sp.connect('value-changed',
                            lambda s, k=key: on_field_change(k, int(s.get_value())))
                 row.pack_start(sp, False, False, 0)
@@ -3055,6 +3163,12 @@ class AdvancedTrayIndicator:
         btn_restart.connect('clicked', on_restart)
         btn_close.connect('clicked', lambda b: dialog.response(
             Gtk.ResponseType.CLOSE))
+        # ⭐ ФИКС v2.0.11 (user: «окно выбора режима не закрывается
+        # по кнопке закрыть»): окно показывается через show() без
+        # run() — response никто не слушал (в v2.0.10 починили
+        # так профили/справку, это окно пропустили). Слушаем
+        # вручную → destroy.
+        dialog.connect('response', lambda d, r: d.destroy())
         # тест-хуки: кнопки операции
         self._mode_btns = {'start': btn_start, 'stop': btn_stop,
                            'restart': btn_restart}
@@ -4063,72 +4177,169 @@ class AdvancedTrayIndicator:
 
     # ================= /ПОИСК СТРАТЕГИИ =================
 
-    # ================= ОБНОВЛЕНИЕ BYEDPI =================
+    # ================= ОБНОВЛЕНИЕ ДВИЖКОВ (v2.0.11) =================
+    # ⭐ v2.0.11 (user: «обновлять будем отдельно 2 кнопки — одна для
+    # запрет (zapret/nfqws), другая для байдпи; с открываемым
+    # консольным окном этапов и команд, которое по завершении ждёт
+    # нажатия клавиши для закрытия»).
+
+    def _open_update_console(self, title, target_name):
+        """Консольное окно обновления (терминал-подобный TextView).
+
+        Возвращает (dialog, log_fn, finish_fn):
+          * log_fn(msg) — потокобезопасно дописывает строку;
+          * finish_fn(ok, summary) — финальная строка + ожидание
+            нажатия «Закрыть» (кнопка/Enter/Esc активны только
+            после завершения).
+        """
+        dialog = Gtk.Dialog(title=title, flags=0)
+        dialog.set_default_size(720, 480)
+        content = dialog.get_content_area()
+        content.set_margin_top(8)
+        content.set_margin_bottom(8)
+        content.set_margin_start(8)
+        content.set_margin_end(8)
+
+        head = Gtk.Label()
+        head.set_markup(f'<b>Обновление {target_name}</b> — этапы и команды')
+        head.set_xalign(0)
+        content.pack_start(head, False, False, 4)
+
+        sw = Gtk.ScrolledWindow()
+        sw.set_vexpand(True)
+        sw.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        tv = Gtk.TextView()
+        tv.set_editable(False)
+        tv.set_monospace(True)
+        tv.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        buf = tv.get_buffer()
+        end_tag = buf.create_tag('final', weight=Pango.Weight.BOLD)
+        buf.create_tag('ok', foreground='#2e7d32')
+        buf.create_tag('err', foreground='#c62828')
+        buf.create_tag('dim', foreground='#888a85',
+                       scale=Pango.Scale.SMALL)
+        sw.add(tv)
+        content.pack_start(sw, True, True, 0)
+
+        btn_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
+                          spacing=8)
+        btn_close = Gtk.Button(label='Закрыть')
+        btn_close.set_sensitive(False)   # активен только в конце
+        btn_row.pack_end(btn_close, False, False, 0)
+        content.pack_start(btn_row, False, False, 4)
+        content.show_all()
+
+        state = {'done': False}
+
+        def log(msg, kind=None):
+            """Дописать строку в лог (потокобезопасно)."""
+            def add():
+                b = buf
+                ins = b.get_end_iter()
+                txt = msg if msg.endswith('\n') else msg + '\n'
+                if kind:
+                    b.insert_with_tags(ins, txt, b.get_tag_table()
+                                       .lookup(kind))
+                else:
+                    b.insert(ins, txt)
+                # автопрокрутка вниз
+                mark = b.get_insert()
+                tv.scroll_to_mark(mark, 0.1, False, 0, 0)
+                return False
+            GLib.idle_add(add)
+
+        def finish(ok, summary):
+            """Завершение: итоговая строка, кнопка «Закрыть» активна."""
+            def add():
+                b = buf
+                ins = b.get_end_iter()
+                line = ('\n✅ ' if ok else '\n❌ ') + summary + '\n'
+                b.insert_with_tags(ins, line, end_tag)
+                b.insert(ins, '\n— Нажмите «Закрыть», чтобы завершить —\n')
+                btn_close.set_sensitive(True)
+                btn_close.grab_focus()
+                state['done'] = True
+                return False
+            GLib.idle_add(add)
+
+        btn_close.connect('clicked', lambda b: dialog.destroy())
+        # Enter/Esc тоже закрывают (но только после завершения)
+        dialog.connect('key-press-event',
+                       lambda d, e: (d.destroy(), True)[1]
+                       if state['done'] and
+                       (e.keyval == Gdk.keyval_from_name('Return')
+                        or e.keyval == Gdk.keyval_from_name('Escape'))
+                       else False)
+        dialog.connect('delete-event',
+                       lambda d, e: (state['done'], True)
+                       [0] and (d.destroy(), True)[1] or True)
+        # ↑ пока не завершено — блокируем крестик (update идёт);
+        #   после finish — разрешаем destroy.
+        dialog.show_all()
+        return dialog, log, finish
 
     def update_byedpi(self, widget=None):
-        """Обновление byedpi из git-репозитория БЕЗ переустановки программы.
+        """Обновление byedpi из git-репозитория БЕЗ переустановки.
 
-        Логика:
-          1. Проверяем что ~/byedpi — git-репозиторий hufrea/byedpi
-          2. git pull (права root не нужны)
-          3. make clean && make (локальная сборка, root не нужен)
-          4. Резервная копия старого бинарника + перезапуск сервиса
+        ⭐ v2.0.11: логика прежняя (git pull → make → рестарт),
+        НО вывод идёт в консольное окно этапов, которое ждёт
+        нажатия «Закрыть» по завершении. Кнопка — в «Настройках
+        приложения».
         """
+        dlg, log, finish = self._open_update_console(
+            'Обновление byedpi', 'byedpi (~/byedpi, ветка 17)')
+
         def update_thread():
             byedpi_dir, binary = self._locate_ciadpi(os.environ.get('USER'))
             backup = (byedpi_dir / 'ciadpi.bak') if byedpi_dir else None
 
             if not byedpi_dir or not binary:
-                GLib.idle_add(self.show_notification,
-                              t('notif.error'),
-                              "byedpi git-каталог не найден (~~/byedpi). "
-                              "При пакетной установке обновление выполняется "
-                              "через менеджер пакетов.")
+                finish(False, 'git-каталог ~/byedpi не найден — '
+                              'обновление доступно только для git-'
+                              'установки (пакетной — через пакетный '
+                              'менеджер)')
                 return
 
-            def log(msg):
-                print(f"[byedpi-update] {msg}")
-
             # 1) Проверка репозитория
+            log('$ git -C ~/byedpi remote get-url origin')
             remotes = subprocess.run(
                 ['git', '-C', str(byedpi_dir), 'remote', 'get-url', 'origin'],
                 capture_output=True, text=True, timeout=10
             )
             if remotes.returncode != 0:
-                GLib.idle_add(self.show_notification, "Ошибка",
-                              "~/byedpi не является git-репозиторием.\n"
-                              "Обновление невозможно без переустановки.")
+                log('не git-репозиторий — обновление невозможно', 'err')
+                finish(False, '~/byedpi не является git-репозиторием')
                 return
-            log(f"remote: {remotes.stdout.strip()}")
+            log(remotes.stdout.strip(), 'dim')
 
             # 2) Текущая версия
             old_hash = subprocess.run(
                 ['git', '-C', str(byedpi_dir), 'rev-parse', '--short', 'HEAD'],
                 capture_output=True, text=True, timeout=10
             ).stdout.strip()
-            log(f"текущая версия: {old_hash}")
+            log(f'текущая версия: {old_hash}', 'dim')
 
             # 3) Резервная копия текущего бинарника (для отката)
             try:
                 if binary.exists():
                     import shutil as _shutil
                     _shutil.copy2(binary, backup)
-                    log(f"бэкап бинарника: {backup}")
+                    log(f'бэкап бинарника: {backup}', 'dim')
             except Exception as e:
-                log(f"⚠️ не удалось сделать бэкап: {e}")
+                log(f'⚠️ не удалось сделать бэкап: {e}', 'dim')
 
             # 4) Останавливаем сервис перед заменой бинарника
-            log("останавливаем сервис...")
+            log('$ systemctl stop ciadpi.service')
             self._systemctl('stop', 'ciadpi.service')
 
             try:
                 # 5) git pull
-                log("git pull...")
+                log('$ git -C ~/byedpi pull --ff-only')
                 pull = subprocess.run(
                     ['git', '-C', str(byedpi_dir), 'pull', '--ff-only'],
                     capture_output=True, text=True, timeout=120
                 )
-                log(pull.stdout.strip() or pull.stderr.strip())
+                log(pull.stdout.strip() or pull.stderr.strip(), 'dim')
                 if pull.returncode != 0:
                     raise RuntimeError(f"git pull failed: {pull.stderr.strip()[:200]}")
 
@@ -4138,30 +4349,30 @@ class AdvancedTrayIndicator:
                 ).stdout.strip()
 
                 if new_hash == old_hash and binary.exists():
-                    log("уже последняя версия")
-                    GLib.idle_add(self.show_notification, "byedpi",
-                                  f"Уже последняя версия ({old_hash})")
-                    # всё равно пересобирать не будем — просто запускаем обратно
+                    log('уже последняя версия', 'ok')
                     self._systemctl('start', 'ciadpi.service')
+                    finish(True, f'byedpi уже последней версии ({old_hash}) — '
+                                 'сервис возвращён в работу')
                     return
 
                 # 6) Сборка
-                log("make clean...")
+                log('$ make -C ~/byedpi clean')
                 subprocess.run(['make', '-C', str(byedpi_dir), 'clean'],
                                capture_output=True, text=True, timeout=60)
-                log("компиляция make...")
+                log('$ make -C ~/byedpi')
                 build = subprocess.run(
                     ['make', '-C', str(byedpi_dir)],
                     capture_output=True, text=True, timeout=300
                 )
                 if build.returncode != 0 or not binary.exists():
                     err = (build.stderr or build.stdout or '')[-400:]
+                    log(err, 'err')
                     raise RuntimeError(f"Сборка не удалась: {err}")
 
-                log("сборка успешна ✅")
+                log('сборка успешна', 'ok')
 
                 # 7) Перезапуск сервиса с прежними параметрами
-                log("запускаем сервис...")
+                log('$ systemctl start ciadpi.service')
                 started = self._systemctl('start', 'ciadpi.service')
                 time.sleep(3)
                 active = subprocess.run(
@@ -4170,29 +4381,191 @@ class AdvancedTrayIndicator:
                 ).stdout.strip() == 'active'
 
                 if active:
-                    msg = f"byedpi обновлён: {old_hash} → {new_hash}. Сервис работает."
-                    log(msg)
-                    GLib.idle_add(self.show_notification, "Обновление завершено", msg)
+                    msg = f'byedpi обновлён: {old_hash} → {new_hash}. Сервис работает.'
+                    log(msg, 'ok')
+                    finish(True, f'{old_hash} → {new_hash}, сервис активен')
                 else:
-                    # Откат на резервную копию если сервис не поднялся
-                    log("сервис не запустился — пробуем откатить бинарник")
+                    log('сервис не запустился — откат бинарника', 'err')
                     if backup.exists():
                         import shutil as _shutil
                         _shutil.copy(backup, binary)
                     self._systemctl('start', 'ciadpi.service')
-                    GLib.idle_add(self.show_notification, "byedpi",
-                                  f"Обновлён до {new_hash}, но сервис не стартовал — "
-                                  "выполнен откат, проверьте логи")
-
+                    finish(False, f'обновлён до {new_hash}, но сервис не '
+                                  'стартовал — выполнен откат, проверьте '
+                                  'логи (journalctl -u ciadpi.service)')
             except Exception as e:
-                log(f"ОШИБКА: {e}")
-                # Пытаемся вернуть сервис в рабочее состояние
+                log(f'ОШИБКА: {e}', 'err')
                 self._systemctl('start', 'ciadpi.service')
-                GLib.idle_add(self.show_notification, "Ошибка обновления", str(e)[:200])
+                finish(False, f'обновление прервано: {str(e)[:180]} — '
+                              'сервис возвращён в работу')
 
         threading.Thread(target=update_thread, daemon=True).start()
 
-    # ================= /ОБНОВЛЕНИЕ BYEDPI =================
+    def update_zapret(self, widget=None):
+        """⭐ v2.0.11: обновление nfqws (zapret) из git — вторая кнопка.
+
+        Логика зеркальна update_byedpi: git pull в ~/zapret →
+        пересборка nfq (make) → рестарт ciadpi-nfqws.service,
+        если он был активен. Лог — в консольное окно этапов.
+        """
+        dlg, log, finish = self._open_update_console(
+            'Обновление nfqws (zapret)', 'nfqws (~/zapret/nfq)')
+
+        def update_thread():
+            zapret_dir = Path.home() / 'zapret'
+            nfqws_bin = zapret_dir / 'nfq' / 'nfqws'
+            backup = zapret_dir / 'nfq' / 'nfqws.bak'
+
+            if not zapret_dir.exists():
+                finish(False, '~/zapret не найден — nfqws-режим '
+                              'не установлен на этой машине')
+                return
+
+            # 1) Проверка репозитория
+            log('$ git -C ~/zapret remote get-url origin')
+            remotes = subprocess.run(
+                ['git', '-C', str(zapret_dir), 'remote', 'get-url', 'origin'],
+                capture_output=True, text=True, timeout=10
+            )
+            if remotes.returncode != 0:
+                log('не git-репозиторий — обновление невозможно', 'err')
+                finish(False, '~/zapret не является git-репозиторием')
+                return
+            log(remotes.stdout.strip(), 'dim')
+
+            # 2) Текущая версия
+            old_hash = subprocess.run(
+                ['git', '-C', str(zapret_dir), 'rev-parse', '--short', 'HEAD'],
+                capture_output=True, text=True, timeout=10
+            ).stdout.strip()
+            log(f'текущая версия: {old_hash}', 'dim')
+
+            # 3) Бэкап бинарника
+            try:
+                if nfqws_bin.exists():
+                    import shutil as _shutil
+                    _shutil.copy2(nfqws_bin, backup)
+                    log(f'бэкап бинарника: {backup}', 'dim')
+            except Exception as e:
+                log(f'⚠️ не удалось сделать бэкап: {e}', 'dim')
+
+            # 4) Стоп сервиса (если активен)
+            was_active = False
+            try:
+                import ciadpi_enginectl as ec
+                was_active = ec.is_active('nfqws')
+            except Exception:
+                pass
+            if was_active:
+                log('$ systemctl stop ciadpi-nfqws.service')
+                try:
+                    import ciadpi_enginectl as ec
+                    ec.stop_engine('nfqws')
+                except Exception as e:
+                    log(f'⚠️ стоп: {e}', 'dim')
+
+            try:
+                # 5) git pull
+                log('$ git -C ~/zapret pull --ff-only')
+                pull = subprocess.run(
+                    ['git', '-C', str(zapret_dir), 'pull', '--ff-only'],
+                    capture_output=True, text=True, timeout=120
+                )
+                log(pull.stdout.strip() or pull.stderr.strip(), 'dim')
+                if pull.returncode != 0:
+                    raise RuntimeError(f"git pull failed: {pull.stderr.strip()[:200]}")
+
+                new_hash = subprocess.run(
+                    ['git', '-C', str(zapret_dir), 'rev-parse', '--short', 'HEAD'],
+                    capture_output=True, text=True, timeout=10
+                ).stdout.strip()
+
+                if new_hash == old_hash and nfqws_bin.exists():
+                    log('уже последняя версия', 'ok')
+                    if was_active:
+                        log('$ systemctl start ciadpi-nfqws.service')
+                        try:
+                            import ciadpi_enginectl as ec
+                            ec.start_engine('nfqws')
+                        except Exception as e:
+                            log(f'⚠️ старт: {e}', 'dim')
+                    finish(True, f'zapret уже последней версии ({old_hash})')
+                    return
+
+                # 6) Сборка nfqws
+                log('$ make -C ~/zapret/nfq clean && make')
+                subprocess.run(['make', '-C', str(zapret_dir / 'nfq'), 'clean'],
+                               capture_output=True, text=True, timeout=60)
+                build = subprocess.run(
+                    ['make', '-C', str(zapret_dir / 'nfq')],
+                    capture_output=True, text=True, timeout=300
+                )
+                if build.returncode != 0 or not nfqws_bin.exists():
+                    err = (build.stderr or build.stdout or '')[-400:]
+                    log(err, 'err')
+                    raise RuntimeError(f"Сборка nfqws не удалась: {err}")
+
+                log('сборка nfqws успешна', 'ok')
+                # копируем в binaries/my (куда смотрит менеджер)
+                try:
+                    binaries_dir = zapret_dir / 'binaries' / 'my'
+                    if binaries_dir.exists():
+                        import shutil as _shutil
+                        _shutil.copy2(nfqws_bin, binaries_dir / 'nfqws')
+                        log(f'копия: {binaries_dir}/nfqws', 'dim')
+                except Exception as e:
+                    log(f'⚠️ копия в binaries/my: {e}', 'dim')
+
+                # 7) Рестарт, если был активен
+                if was_active:
+                    log('$ systemctl start ciadpi-nfqws.service')
+                    try:
+                        import ciadpi_enginectl as ec
+                        ec.start_engine('nfqws')
+                    except Exception as e:
+                        log(f'⚠️ старт: {e}', 'dim')
+                    time.sleep(2)
+                    try:
+                        import ciadpi_enginectl as ec
+                        active = ec.is_active('nfqws')
+                    except Exception:
+                        active = False
+                else:
+                    active = False
+
+                if not was_active:
+                    finish(True, f'zapret {old_hash} → {new_hash} — '
+                                  'nfqws собран (сервис не был активен)')
+                elif active:
+                    log('сервис активен', 'ok')
+                    finish(True, f'zapret {old_hash} → {new_hash} — '
+                                  'nfqws обновлён, сервис активен')
+                else:
+                    log('сервис не поднялся — откат', 'err')
+                    if backup.exists():
+                        import shutil as _shutil
+                        _shutil.copy(backup, nfqws_bin)
+                        try:
+                            import ciadpi_enginectl as ec
+                            ec.start_engine('nfqws')
+                        except Exception as e:
+                            log(f'⚠️ откат-старт: {e}', 'dim')
+                    finish(False, f'собран {new_hash}, но сервис не '
+                                  'поднялся — откат, проверьте логи')
+
+            except Exception as e:
+                log(f'ОШИБКА: {e}', 'err')
+                if was_active:
+                    try:
+                        import ciadpi_enginectl as ec
+                        ec.start_engine('nfqws')
+                    except Exception:
+                        pass
+                finish(False, f'обновление прервано: {str(e)[:180]}')
+
+        threading.Thread(target=update_thread, daemon=True).start()
+
+    # ================= /ОБНОВЛЕНИЕ ДВИЖКОВ =================
 
     def show_logs(self, widget):
         try:
@@ -4457,7 +4830,19 @@ class AdvancedTrayIndicator:
         раскрывается по плюсику в строке): общее описание всегда видно,
         детали каждого движка раскрываются только когда нужны.
         Тексты секций — HELP_SECTIONS в ciadpi_texts.py (ru/en).
+        ⭐ v2.0.11 (user: «справка открывает дублями — пусть
+        фокусируется открытое»): синглтон — повторный вызов поднимает
+        существующее окно, новое не создаётся.
         """
+        # синглтон: уже открыто? — поднимаем существующее
+        existing = getattr(self, '_help_window', None)
+        if existing is not None:
+            try:
+                existing.present()
+                return
+            except Exception:
+                self._help_window = None
+
         lang = get_lang()
         sections = HELP_SECTIONS.get(lang) or HELP_SECTIONS.get('ru', {})
         if not sections:
@@ -4467,6 +4852,7 @@ class AdvancedTrayIndicator:
         dialog = Gtk.Dialog(title=t('help.title'), flags=0)
         dialog.add_buttons(t('btn.ok'), Gtk.ResponseType.OK)
         dialog.set_default_size(620, 560)
+        self._help_window = dialog
 
         content_area = dialog.get_content_area()
         scroll = Gtk.ScrolledWindow()
@@ -4519,6 +4905,9 @@ class AdvancedTrayIndicator:
         # response без run() никто не слушал — слушаем вручную.
         dialog.connect('response',
                        lambda d, r: d.destroy())
+        # ⭐ v2.0.11: чистим синглтон-ссылку при закрытии
+        dialog.connect('destroy',
+                       lambda d: setattr(self, '_help_window', None))
 
     def show_about(self, widget):
         """Окно «О программе» (на языке интерфейса)"""
@@ -4622,10 +5011,27 @@ class AdvancedTrayIndicator:
             print(f"⚠️ Не удалось пересобрать меню: {e}")
 
     def show_app_settings(self, widget=None):
-        """Диалог настроек приложения: язык, уведомления, автозапуск."""
+        """Диалог настроек приложения: язык, уведомления, автозапуск.
+
+        ⭐ v2.0.11 (user): 1) окно НЕМОДАЛЬНОЕ (run() блокировал
+        трей); 2) добавлена секция «Обновление движков» с ДВУМЯ
+        кнопками — byedpi и nfqws (zapret) — обновление идёт
+        в консольном окне этапов (см. update_byedpi/
+        update_zapret); 3) сохранение настроек — по кнопке
+        «Сохранить», а не при любом закрытии.
+        """
+        existing = getattr(self, '_app_settings_window', None)
+        if existing is not None:
+            try:
+                existing.present()
+                return
+            except Exception:
+                self._app_settings_window = None
+
         dialog = Gtk.Dialog(title=t('app.title'), flags=0)
         dialog.add_buttons(t('btn.close'), Gtk.ResponseType.CLOSE)
-        dialog.set_default_size(480, 420)
+        dialog.set_default_size(520, 520)
+        self._app_settings_window = dialog
 
         box = dialog.get_content_area()
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
@@ -4703,42 +5109,93 @@ class AdvancedTrayIndicator:
         auto_box.pack_start(auto_hint, False, False, 0)
         auto_frame.add(auto_box)
 
+        # --- ⭐ v2.0.11: Обновление движков (2 кнопки) ---
+        upd_frame = Gtk.Frame(label='Обновление движков')
+        upd_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        upd_box.set_margin_top(8)
+        upd_box.set_margin_bottom(8)
+        upd_box.set_margin_start(8)
+        upd_box.set_margin_end(8)
+
+        upd_hint = Gtk.Label()
+        upd_hint.set_markup(
+            '<small>Обновление из git без переустановки: git pull → '
+            'сборка → рестарт сервиса.\nКаждое обновление открывает '
+            'консольное окно с этапами и командами — по завершении '
+            'оно ждёт нажатия «Закрыть».</small>')
+        upd_hint.set_xalign(0)
+        upd_hint.set_line_wrap(True)
+
+        upd_btn_row = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        btn_upd_byedpi = Gtk.Button(label='⬆️ Обновить byedpi')
+        btn_upd_byedpi.set_tooltip_text(
+            'git pull в ~/byedpi (ветка 17), пересборка бинарника '
+            'ciadpi, рестарт ciadpi.service с прежними параметрами')
+        btn_upd_byedpi.connect('clicked', self.update_byedpi)
+        btn_upd_zapret = Gtk.Button(label='⬆️ Обновить nfqws (запрет)')
+        btn_upd_zapret.set_tooltip_text(
+            'git pull в ~/zapret, пересборка nfq/nfqws, рестарт '
+            'ciadpi-nfqws.service с прежними параметрами')
+        btn_upd_zapret.connect('clicked', self.update_zapret)
+        upd_btn_row.pack_start(btn_upd_byedpi, True, True, 0)
+        upd_btn_row.pack_start(btn_upd_zapret, True, True, 0)
+
+        upd_box.pack_start(upd_hint, False, False, 0)
+        upd_box.pack_start(upd_btn_row, False, False, 0)
+        upd_frame.add(upd_box)
+
         vbox.pack_start(lang_frame, False, False, 0)
         vbox.pack_start(notif_frame, False, False, 0)
         vbox.pack_start(auto_frame, False, False, 0)
+        vbox.pack_start(upd_frame, False, False, 0)
         box.pack_start(vbox, True, True, 0)
         box.show_all()
 
-        dialog.run()
+        # ⭐ v2.0.11: сохранение — по кнопке «Сохранить», не при
+        # любом закрытии (пользователь может просто посмотреть).
+        btn_save = Gtk.Button(label='💾 Сохранить')
+        btn_save.connect('clicked', lambda b: _save_settings())
 
-        # Сохранение при закрытии
-        new_lang = 'ru' if lang_combo.get_active() == 0 else 'en'
-        lang_changed = new_lang != get_lang()
-        if lang_changed:
-            set_lang(new_lang)
-            save_lang()
+        save_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
+                           spacing=8)
+        save_row.pack_end(btn_save, False, False, 0)
+        box.pack_start(save_row, False, False, 4)
+        box.show_all()
 
-        self.app_prefs["notifications_enabled"] = chk_notif_all.get_active()
-        self.app_prefs["notif_service"] = chk_notif_service.get_active()
-        self.app_prefs["notif_params"] = chk_notif_params.get_active()
-        self.app_prefs["notif_proxy"] = chk_notif_proxy.get_active()
-        self.app_prefs["autostart_indicator"] = chk_autostart.get_active()
-        self._save_app_prefs()
-        self._set_autostart(chk_autostart.get_active())
-        dialog.destroy()
+        def _save_settings():
+            new_lang = 'ru' if lang_combo.get_active() == 0 else 'en'
+            lang_changed = new_lang != get_lang()
+            if lang_changed:
+                set_lang(new_lang)
+                save_lang()
 
-        # ⭐ ЯЗЫК ПРИМЕНЯЕТСЯ СРАЗУ: пересобираем меню трея
-        if lang_changed:
-            self.rebuild_menu()
-            # уведомление на ОБОИХ языках (пользователь мог не понять
-            # сообщение на новом) — без блокирующего диалога,
-            # чтобы «Выход» никогда не зависал из-за скрытого окна
-            self.show_notification(
-                "🇷🇺 Язык изменён — меню обновлено\n🇬🇧 Language changed — menu updated",
-                t('app.lang_now'),
-                category=None)
+            self.app_prefs["notifications_enabled"] = chk_notif_all.get_active()
+            self.app_prefs["notif_service"] = chk_notif_service.get_active()
+            self.app_prefs["notif_params"] = chk_notif_params.get_active()
+            self.app_prefs["notif_proxy"] = chk_notif_proxy.get_active()
+            self.app_prefs["autostart_indicator"] = chk_autostart.get_active()
+            self._save_app_prefs()
+            self._set_autostart(chk_autostart.get_active())
 
-        self.show_notification(t('notif.success'), t('app.saved'))
+            # ⭐ язык применяется сразу: пересобираем меню трея
+            if lang_changed:
+                self.rebuild_menu()
+                self.show_notification(
+                    "🇷🇺 Язык изменён — меню обновлено\n🇬🇧 Language changed — menu updated",
+                    t('app.lang_now'),
+                    category=None)
+            self.show_notification(t('notif.success'), t('app.saved'))
+
+        # ⭐ v2.0.11: НЕМОДАЛЬНОЕ окно (dialog.run() блокировал трей
+        # и остальные окна — user: «у настроек приложения убрать
+        # модальность»).
+        dialog.connect('response', lambda d, r: d.destroy())
+        dialog.connect('destroy',
+                       lambda d: setattr(self, '_app_settings_window',
+                                         None))
+        dialog.connect('delete-event',
+                       lambda d, e: (d.destroy(), True)[1])
 
     def show_notification(self, title, message, category=None):
         """Уведомление с учётом пользовательских фильтров.
