@@ -972,6 +972,13 @@ class AdvancedTrayIndicator:
         try:
             with open(self.whitelist_file, 'w', encoding='utf-8') as f:
                 json.dump(self.whitelist, f, indent=2, ensure_ascii=False)
+            # ⭐ v2.0.13: белый список — в активный профиль
+            try:
+                import ciadpi_profiles
+                ciadpi_profiles.ProfileManager().sync_active(
+                    fields=('whitelist',))
+            except Exception:
+                pass
             return True
         except Exception as e:
             print(f"Ошибка сохранения белого списка: {e}")
@@ -2591,6 +2598,13 @@ class AdvancedTrayIndicator:
 
                 self.current_params['engine'] = engine
                 self.save_config()
+                # ⭐ v2.0.13: смена движка из меню — в активный профиль
+                try:
+                    import ciadpi_profiles
+                    ciadpi_profiles.ProfileManager().sync_active(
+                        fields=('engine', 'bridge'))
+                except Exception:
+                    pass
                 # ⭐ boot-флаги: на загрузке поднимется именно выбранный
                 # движок. Порядок безопасный: сначала enable выбранного,
                 # при успехе disable остальных.
@@ -3047,6 +3061,14 @@ class AdvancedTrayIndicator:
                     if name != self._active_engine():
                         self.current_params['engine'] = name
                 self.save_config()
+                # ⭐ v2.0.13: смена выбранного режима — в активный
+                # профиль (выбор = часть состояния профиля)
+                try:
+                    import ciadpi_profiles
+                    ciadpi_profiles.ProfileManager().sync_active(
+                        fields=('engine', 'bridge'))
+                except Exception:
+                    pass
 
         for name, title, desc in modes:
             row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
@@ -3296,6 +3318,9 @@ class AdvancedTrayIndicator:
         def on_save(btn):
             name = name_entry.get_text()
             ok, msg = pm.capture_current(name)
+            # ⭐ v2.0.13: capture_current(make_active=True) сам делает
+            # сохранённый профиль активным — все дальнейшие изменения
+            # (параметры, M+/M−, белый список, настройки) пишутся в него.
             status_lbl.set_markup(
                 f'<small>{"✅" if ok else "❌"} {GLib.markup_escape_text(msg)}</small>')
             if ok:
@@ -3313,6 +3338,38 @@ class AdvancedTrayIndicator:
             def worker():
                 ok, msg = pm.apply_profile(name)
                 def done():
+                    # ⭐ ФИКС v2.0.13 (user: «при активации запускается
+                    # запомненный режим, но он не выбирается, а выбор
+                    # остаётся на прежнем»): apply_profile пишет в
+                    # config.json на ДИСК, а трей держит выбор в ПАМЯТИ
+                    # (self.current_params) — никто его не перечитывал.
+                    # Перечитываем конфиг целиком: движок, мост,
+                    # параметры, недавние, избранное.
+                    try:
+                        self.current_params = self.load_config()
+                    except Exception as e:
+                        print(f'⚠️ reload config после профиля: {e}')
+                    # ⭐ v2.0.13: настройки приложения и белый список —
+                    # из профиля (apply_profile уже записал файлы)
+                    try:
+                        self.app_prefs = self._load_app_prefs()
+                    except Exception:
+                        pass
+                    try:
+                        self.whitelist = self.load_whitelist()
+                        if self.whitelist_manager is not None:
+                            self.whitelist_manager.whitelist = \
+                                self.whitelist
+                    except Exception:
+                        pass
+                    # открытое окно «Настройки режима» построено под
+                    # СТАРЫЙ режим — закрыть, откроют уже правильное
+                    try:
+                        ms = getattr(self, '_mode_settings_window', None)
+                        if ms is not None and ms.dialog is not None:
+                            ms.dialog.destroy()
+                    except Exception:
+                        pass
                     status_lbl.set_markup(
                         f'<small>{"✅" if ok else "❌"} '
                         f'{GLib.markup_escape_text(msg)}</small>')
@@ -3344,10 +3401,13 @@ class AdvancedTrayIndicator:
         btn_box.pack_end(btn_close, False, False, 0)
 
         hint = Gtk.Label()
-        hint.set_markup('<small>Профиль хранит: выбранный режим, параметры\n'
-                       'byedpi/nfqws/хосты snimod, состояние DNS-моста и\n'
-                       'настройки прокси. «Сохранить» снимает снимок ТЕКУЩИХ\n'
-                       'настроек; «Применить» поднимает их целиком.</small>')
+        hint.set_markup('<small>Профиль хранит ПОЛНОЕ состояние: выбранный\n'
+                       'режим, параметры всех движков, недавние и избранные\n'
+                       'параметры, белый список, настройки приложения и язык.\n'
+                       '«Сохранить» снимает снимок текущего состояния и делает\n'
+                       'профиль активным; «Применить» переключает на него\n'
+                       'целиком. Пока профиль активен — все изменения пишутся\n'
+                       'в него автоматически.</small>')
         hint.set_xalign(0)
 
         box.pack_start(hint, False, False, 0)
@@ -4964,6 +5024,13 @@ class AdvancedTrayIndicator:
         try:
             with open(prefs_file, 'w', encoding='utf-8') as f:
                 json.dump(self.app_prefs, f, indent=2, ensure_ascii=False)
+            # ⭐ v2.0.13: настройки приложения — в активный профиль
+            try:
+                import ciadpi_profiles
+                ciadpi_profiles.ProfileManager().sync_active(
+                    fields=('app_prefs',))
+            except Exception:
+                pass
         except Exception as e:
             print(f"⚠️ Не удалось сохранить app_prefs: {e}")
 
@@ -5173,6 +5240,13 @@ class AdvancedTrayIndicator:
             if lang_changed:
                 set_lang(new_lang)
                 save_lang()
+                # ⭐ v2.0.13: язык — в активный профиль
+                try:
+                    import ciadpi_profiles
+                    ciadpi_profiles.ProfileManager().sync_active(
+                        fields=('lang',))
+                except Exception:
+                    pass
 
             self.app_prefs["notifications_enabled"] = chk_notif_all.get_active()
             self.app_prefs["notif_service"] = chk_notif_service.get_active()

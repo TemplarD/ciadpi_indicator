@@ -181,6 +181,45 @@ class ModeSettingsWindow:
         p = Path.home() / '.config' / 'ciadpi' / 'config.json'
         p.write_text(json.dumps(cfg, indent=2, ensure_ascii=False),
                      encoding='utf-8')
+        # ⭐ v2.0.13: активный профиль получает изменения памяти
+        # (недавние/избранное/параметры) автоматически
+        try:
+            import ciadpi_profiles
+            ciadpi_profiles.ProfileManager().sync_active(
+                fields=('params_recent', 'params_favorites',
+                        'byedpi_params'))
+        except Exception:
+            pass
+
+    @staticmethod
+    def _sync_profile(**field_map):
+        """⭐ v2.0.13: синк активного профиля при изменении конфигов
+        движков (nfqws.json/snimod.json пишутся напрямую — мимо
+        _save_cfg) и прочих файлов состояния. field_map: имя поля
+        профиля → значение (перезаписать напрямую); без аргументов
+        — синк по полям движков из файлов."""
+        try:
+            import ciadpi_profiles
+            pm = ciadpi_profiles.ProfileManager()
+            if field_map:
+                # перезаписать конкретные поля значениями
+                name = pm.active_profile()
+                if not name:
+                    return
+                ok, data = pm.load_profile(name)
+                if not ok or not isinstance(data, dict):
+                    return
+                import time as _t
+                for k, v in field_map.items():
+                    data[k] = v
+                data['updated_at'] = _t.strftime('%Y-%m-%d %H:%M')
+                (pm.profiles_dir / f'{name}.json').write_text(
+                    json.dumps(data, indent=2, ensure_ascii=False),
+                    encoding='utf-8')
+            else:
+                pm.sync_active(fields=('nfqws_params', 'snimod_hosts'))
+        except Exception:
+            pass
 
     def _recent_for(self, mode):
         cfg = self._load_cfg()
@@ -642,6 +681,8 @@ class ModeSettingsWindow:
             cfg['hosts'] = hosts
             p.write_text(json.dumps(cfg, indent=2, ensure_ascii=False),
                          encoding='utf-8')
+            # ⭐ v2.0.13: хосты snimod — в активный профиль
+            self._sync_profile(snimod_hosts=hosts)
             # применяем на лету, если сервис активен — перезапуск
             import ciadpi_enginectl as ec
             if ec.is_active('snimod'):
@@ -1079,6 +1120,8 @@ class ModeSettingsWindow:
                     p.write_text(json.dumps(cfg, indent=2,
                                             ensure_ascii=False),
                                  encoding='utf-8')
+                    # ⭐ v2.0.13: хосты snimod — в активный профиль
+                    self._sync_profile(snimod_hosts=hosts)
                     import ciadpi_enginectl as ec
                     if ec.is_active('snimod'):
                         import threading
@@ -1120,6 +1163,8 @@ class ModeSettingsWindow:
                     p.write_text(json.dumps(cfg, indent=2,
                                             ensure_ascii=False),
                                  encoding='utf-8')
+                    # ⭐ v2.0.13: параметры nfqws — в активный профиль
+                    self._sync_profile(nfqws_params=params)
                     import ciadpi_enginectl as ec
                     if ec.is_active('nfqws'):
                         r = ec.restart_engine('nfqws')
