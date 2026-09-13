@@ -24,7 +24,8 @@ os.environ['HOME'] = '/tmp/ciadpi_prof_test'
 CFG = Path('/tmp/ciadpi_prof_test/.config/ciadpi')
 CFG.mkdir(parents=True, exist_ok=True)
 
-sys.path.insert(0, '/home/templard/ciadpi_indicator')
+REPO_ROOT = str(Path(__file__).resolve().parent)
+sys.path.insert(0, REPO_ROOT)
 
 import gi
 gi.require_version('Gtk', '3.0')

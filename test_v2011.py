@@ -17,7 +17,9 @@ import json
 import subprocess
 import sys
 
-sys.path.insert(0, '/home/templard/ciadpi_indicator')
+import os as _os
+REPO_ROOT = _os.path.dirname(_os.path.abspath(__file__))
+sys.path.insert(0, REPO_ROOT)
 
 import gi
 gi.require_version('Gtk', '3.0')
@@ -234,7 +236,7 @@ def test_menu_no_ellipsis():
     # ищем в исходнике пункты с многоточием — уже проверено lint'ом,
     # но проверим живьём: смонтируем меню-обёртку
     import re
-    src = open('/home/templard/ciadpi_indicator/ciadpi_advanced_tray.py',
+    src = open(REPO_ROOT + '/ciadpi_advanced_tray.py',
                encoding='utf-8').read()
     # MenuItem(label='...…') в секции меню — не должно быть
     menu_block = src[src.index('def rebuild_menu'):src.index('def update_status')] \
@@ -293,7 +295,7 @@ def test_app_settings():
           f"btns={[b for b in all_btns if 'Сохранить' in b]}")
     # НЕМОДАЛЬНОСТЬ: dialog.run() не вызывается — проверим, что окно
     # не заблокировало GTK-цикл: главное, что show() + нет run() в коде
-    src = open('/home/templard/ciadpi_indicator/ciadpi_advanced_tray.py',
+    src = open(REPO_ROOT + '/ciadpi_advanced_tray.py',
                encoding='utf-8').read()
     app_block = src[src.index('def show_app_settings'):]
     app_block = app_block[:app_block.index('\n    def ')]
