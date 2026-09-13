@@ -199,6 +199,53 @@ class ModeSettingsWindow:
         rec[mode] = lst[:4]
         self._save_cfg(cfg)
 
+    # ---------------- ⭐ v2.0.12: Избранное (память M+/M−) ----------------
+
+    def _favorites_for(self, mode):
+        """Список избранных строк параметров режима (config.json:
+        params_favorites.<mode>)."""
+        cfg = self._load_cfg()
+        lst = (cfg.get('params_favorites') or {}).get(mode) or []
+        return [s for s in lst if isinstance(s, str)]
+
+    def _favorites_init_defaults(self, mode):
+        """Первичное заполнение: старые «Примеры» — стартовым
+        избранным (юзер может удалить M−). Один раз — только если
+        раздел ещё пуст И ключа нет в конфиге вовсе."""
+        cfg = self._load_cfg()
+        fav = cfg.setdefault('params_favorites', {})
+        if mode in fav:
+            return fav.get(mode) or []
+        examples = MODE_EXAMPLES.get(mode) or []
+        fav[mode] = list(examples)
+        self._save_cfg(cfg)
+        return fav[mode]
+
+    def _favorite_add(self, mode, params_str):
+        """M+: добавить строку в избранное (дубль — наверх)."""
+        params_str = (params_str or '').strip()
+        if not params_str or mode not in MODES:
+            return
+        cfg = self._load_cfg()
+        fav = cfg.setdefault('params_favorites', {})
+        lst = [s for s in (fav.get(mode) or []) if s != params_str]
+        lst.insert(0, params_str)
+        fav[mode] = lst
+        self._save_cfg(cfg)
+
+    def _favorite_remove(self, mode, params_str):
+        """M−: удалить строку из избранного."""
+        params_str = (params_str or '').strip()
+        if not params_str or mode not in MODES:
+            return
+        cfg = self._load_cfg()
+        fav = cfg.get('params_favorites') or {}
+        lst = [s for s in (fav.get(mode) or []) if s != params_str]
+        if mode in fav:
+            fav[mode] = lst
+        cfg.setdefault('params_favorites', fav)
+        self._save_cfg(cfg)
+
     # ---------------- построение окна ----------------
 
     def _build(self):
@@ -230,6 +277,13 @@ class ModeSettingsWindow:
         entry_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
                             spacing=6)
         entry_row.pack_start(self.params_entry, True, True, 0)
+        # ⭐ v2.0.12: M+ у текущего параметра — запомнить в избранное
+        btn_fav = self._fav_mem_button(
+            'M+', 'M+ — запомнить текущие параметры в избранное')
+        btn_fav.connect(
+            'clicked',
+            lambda b: self._on_fav_add_current(mode))
+        entry_row.pack_start(btn_fav, False, False, 0)
         btn_apply_params = Gtk.Button(label='Применить')
         btn_apply_params.connect('clicked',
                                  lambda b: self._on_apply_params(mode))
@@ -328,41 +382,47 @@ class ModeSettingsWindow:
             ent.set_editable(False)
             ent.set_can_focus(False)
             ent.set_hexpand(True)
-            btn = Gtk.Button(label='→ в строку')
+            btn = Gtk.Button(label='→')
+            btn.set_tooltip_text('Скопировать в строку параметров')
             btn.connect('clicked',
                         lambda b: self.params_entry.set_text(default_str))
+            # ⭐ v2.0.12: M+ — вернуть дефолт в избранное (если удалён)
+            btn_m = self._fav_mem_button(
+                'M+', 'M+ — запомнить дефолт в избранное')
+            btn_m.connect('clicked',
+                         lambda b, s=default_str, mmode=mode:
+                         self._on_fav_add_string(mmode, s))
             row.pack_start(lbl, False, False, 0)
             row.pack_start(ent, True, True, 0)
             row.pack_start(btn, False, False, 0)
+            row.pack_start(btn_m, False, False, 0)
             box.pack_start(row, False, False, 2)
 
-        # примеры (кликабельные)
-        examples = MODE_EXAMPLES.get(mode) or []
-        if examples:
-            ex_frame = Gtk.Frame(label='Примеры')
-            ex_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL,
-                             spacing=3)
-            ex_box.set_margin_top(4)
-            ex_box.set_margin_bottom(4)
-            ex_box.set_margin_start(6)
-            ex_box.set_margin_end(6)
-            for ex in examples:
-                r = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
-                            spacing=6)
-                e = Gtk.Entry()
-                e.set_text(ex)
-                e.set_editable(False)
-                e.set_can_focus(False)
-                e.set_hexpand(True)
-                b = Gtk.Button(label='→ в строку')
-                b.connect('clicked',
-                          lambda btn, s=ex:
-                          self.params_entry.set_text(s))
-                r.pack_start(e, True, True, 0)
-                r.pack_start(b, False, False, 0)
-                ex_box.pack_start(r, False, False, 2)
-            ex_frame.add(ex_box)
-            box.pack_start(ex_frame, False, False, 4)
+        # ⭐ v2.0.12 (user: «раздел примеры заменим на избранное —
+        # список с прокруткой, M+ добавить / M− удалить; текущие
+        # примеры — первыми запомненными по умолчанию»):
+        # старые MODE_EXAMPLES становятся стартовым избранным.
+        fav_frame = Gtk.Frame(label='⭐ Избранное — сохранённые параметры')
+        fav_vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL,
+                           spacing=3)
+        fav_vbox.set_margin_top(4)
+        fav_vbox.set_margin_bottom(4)
+        fav_vbox.set_margin_start(6)
+        fav_vbox.set_margin_end(6)
+
+        # скролл (список может расти неограниченно)
+        fav_scroll = Gtk.ScrolledWindow()
+        fav_scroll.set_policy(Gtk.PolicyType.NEVER,
+                              Gtk.PolicyType.AUTOMATIC)
+        fav_inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL,
+                            spacing=3)
+        fav_scroll.add(fav_inner)
+        fav_scroll.set_min_content_height(90)
+        fav_vbox.pack_start(fav_scroll, True, True, 0)
+        self._favorites_vbox = fav_inner      # для живой перерисовки
+        self._fill_favorites(fav_inner, mode)
+        fav_frame.add(fav_vbox)
+        box.pack_start(fav_frame, True, True, 4)
 
         # 4 последних использованных (по режиму, LRU)
         recent_box_holder = {'box': None}
@@ -415,13 +475,110 @@ class ModeSettingsWindow:
                 e.set_editable(False)
                 e.set_can_focus(False)
                 e.set_hexpand(True)
-                b = Gtk.Button(label='→ в строку')
+                # ⭐ v2.0.12: стрелочка без надписи, текст — в tooltip
+                b = Gtk.Button(label='→')
+                b.set_tooltip_text('Скопировать в строку параметров')
                 b.connect('clicked',
                           lambda btn, s=s: self.params_entry.set_text(s))
+                # ⭐ v2.0.12: M+ — запомнить в избранное
+                m = self._fav_mem_button(
+                    'M+', 'M+ — запомнить в избранное')
+                m.connect('clicked',
+                          lambda btn, s=s, mmode=mode:
+                          self._on_fav_add_string(mmode, s))
                 r.pack_start(e, True, True, 0)
                 r.pack_start(b, False, False, 0)
+                r.pack_start(m, False, False, 0)
                 vbox.pack_start(r, False, False, 2)
         vbox.show_all()
+
+    # ---------------- ⭐ v2.0.12: отрисовка «Избранного» ----------------
+
+    def _fav_row_button(self):
+        """Кнопка «→»: квадратная стрелочка без текста, назначение —
+        во всплывающей подсказке (user: «кнопку в строку оставим,
+        но сделаем только стрелочку, а надпись — в подсказку»)."""
+        btn = Gtk.Button(label='→')
+        btn.set_tooltip_text('Скопировать в строку параметров')
+        btn.set_size_request(34, -1)
+        return btn
+
+    def _fav_mem_button(self, label, tooltip):
+        """Квадратная кнопка M+/M− — память калькулятора (user:
+        «кнопочка квадратная с буковкой М+ как память у клавиши
+        калькулятора»)."""
+        btn = Gtk.Button(label=label)      # 'M+' или 'M−'
+        btn.set_size_request(34, -1)
+        btn.set_tooltip_text(tooltip)
+        return btn
+
+    def _fill_favorites(self, vbox, mode):
+        """Перерисовать список избранного для режима."""
+        for w in vbox.get_children():
+            vbox.remove(w)
+        self._favorites_init_defaults(mode)
+        items = self._favorites_for(mode)
+        if not items:
+            empty = Gtk.Label()
+            empty.set_markup('<small>пусто — нажмите M+ у параметра, '
+                             'чтобы запомнить его здесь</small>')
+            empty.set_xalign(0)
+            vbox.pack_start(empty, False, False, 2)
+        else:
+            for s in items:
+                r = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
+                            spacing=6)
+                e = Gtk.Entry()
+                e.set_text(s)
+                e.set_editable(False)
+                e.set_can_focus(False)
+                e.set_hexpand(True)
+                e.set_tooltip_text(s)
+                # «→» — в строку (стрелочка, подсказка всплывает)
+                b = self._fav_row_button()
+                b.connect('clicked',
+                          lambda btn, s=s: self.params_entry.set_text(s))
+                # «M−» — удалить из избранного
+                m = self._fav_mem_button(
+                    'M−', 'M− — убрать из избранного')
+                m.connect('clicked',
+                          lambda btn, s=s, mmode=mode:
+                          self._on_fav_remove(mmode, s))
+                r.pack_start(e, True, True, 0)
+                r.pack_start(b, False, False, 0)
+                r.pack_start(m, False, False, 0)
+                vbox.pack_start(r, False, False, 2)
+        vbox.show_all()
+
+    def _on_fav_remove(self, mode, params_str):
+        """M−: удалить и перерисовать список живьём."""
+        self._favorite_remove(mode, params_str)
+        if getattr(self, '_favorites_vbox', None) is not None:
+            self._fill_favorites(self._favorites_vbox, mode)
+
+    def _on_fav_add_current(self, mode):
+        """M+ у строки параметров: запомнить текущую — в избранное,
+        живая перерисовка списка."""
+        params = (self.params_entry.get_text() or '').strip()
+        if not params:
+            self.tray.show_notification(
+                'Избранное', 'Строка параметров пуста — нечего '
+                'запоминать')
+            return
+        self._favorite_add(mode, params)
+        if getattr(self, '_favorites_vbox', None) is not None:
+            self._fill_favorites(self._favorites_vbox, mode)
+        self.tray.show_notification(
+            'Избранное', 'Параметры запомнены (сверху списка)')
+
+    def _on_fav_add_string(self, mode, params_str):
+        """M+ у строки из «Последних» / найденной стратегии:
+        запомнить произвольную строку — в избранное."""
+        self._favorite_add(mode, params_str)
+        if getattr(self, '_favorites_vbox', None) is not None:
+            self._fill_favorites(self._favorites_vbox, mode)
+        self.tray.show_notification(
+            'Избранное', 'Запомнено в избранное')
 
     def _snimod_hosts_widget(self):
         """Редактор хостов snimod (вместо строки параметров).
@@ -737,10 +894,16 @@ class ModeSettingsWindow:
         b_stop.set_sensitive(False)
         b_use = Gtk.Button(label='→ в строку параметров')
         b_use.set_sensitive(False)
-        self.search_btns = {'start': b_start, 'stop': b_stop, 'use': b_use}
+        # ⭐ v2.0.12: M+ — запомнить НАЙДЕННУЮ стратегию в избранное
+        b_fav = self._fav_mem_button(
+            'M+', 'M+ — запомнить найденную стратегию в избранное')
+        b_fav.set_sensitive(False)
+        self.search_btns = {'start': b_start, 'stop': b_stop,
+                            'use': b_use, 'fav': b_fav}
         btn_row.pack_start(b_start, False, False, 0)
         btn_row.pack_start(b_stop, False, False, 0)
         btn_row.pack_start(b_use, False, False, 0)
+        btn_row.pack_start(b_fav, False, False, 0)
         box.pack_start(btn_row, False, False, 0)
 
         # лог
@@ -758,6 +921,8 @@ class ModeSettingsWindow:
         b_start.connect('clicked', lambda b: self._on_search_start(mode))
         b_stop.connect('clicked', lambda b: self._on_search_stop())
         b_use.connect('clicked', lambda b: self._on_search_use())
+        b_fav.connect('clicked',
+                      lambda b: self._on_search_fav_add(mode))
         return box
 
     def _slog(self, msg):
@@ -858,7 +1023,7 @@ class ModeSettingsWindow:
                         try:
                             b.set_sensitive(
                                 key != 'stop' and
-                                (key != 'use' or
+                                (key not in ('use', 'fav') or
                                  bool(self._search_state.get('best'))))
                         except Exception:
                             pass
@@ -874,6 +1039,18 @@ class ModeSettingsWindow:
                 self._slog('⏹ остановка запрошена…')
             except Exception as e:
                 self._slog(f'стоп: {e}')
+
+    def _on_search_fav_add(self, mode):
+        """⭐ v2.0.12: M+ — найденная стратегия в избранное."""
+        best = self._search_state.get('best')
+        if best:
+            self._favorite_add(mode, best)
+            if getattr(self, '_favorites_vbox', None) is not None:
+                self._fill_favorites(self._favorites_vbox, mode)
+            self._slog('⭐ стратегия запомнена в избранное')
+        else:
+            self._slog('сначала найдите стратегию («→ в строку» '
+                       'станет активной, когда есть результат)')
 
     def _on_search_use(self):
         best = self._search_state.get('best')

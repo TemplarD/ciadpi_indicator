@@ -4216,8 +4216,12 @@ class AdvancedTrayIndicator:
         end_tag = buf.create_tag('final', weight=Pango.Weight.BOLD)
         buf.create_tag('ok', foreground='#2e7d32')
         buf.create_tag('err', foreground='#c62828')
+        # ⭐ ФИКС v2.0.11.1: в PyGObject НЕТ Pango.Scale.SMALL —
+        # только базовый множитель Pango.SCALE (=1.0); small ≈ ×0.83.
+        # Было: AttributeError при открытии окна → консоль не
+        # запускалась ВООБЩЕ (user: «не запускается окно консоли»).
         buf.create_tag('dim', foreground='#888a85',
-                       scale=Pango.Scale.SMALL)
+                       scale=Pango.SCALE * 0.83)
         sw.add(tv)
         content.pack_start(sw, True, True, 0)
 
@@ -5196,6 +5200,11 @@ class AdvancedTrayIndicator:
                                          None))
         dialog.connect('delete-event',
                        lambda d, e: (d.destroy(), True)[1])
+        # ⭐ ФИКС v2.0.11.1: раньше здесь стоял dialog.run(), который
+        # неявно ПОКАЗЫВАЛ окно; после его удаления окно осталось
+        # невидимым (создано, но без show) — user: «запускается
+        # всегда только со 2-го раза» (2-й present() проявлял его).
+        dialog.show_all()
 
     def show_notification(self, title, message, category=None):
         """Уведомление с учётом пользовательских фильтров.
