@@ -1243,7 +1243,7 @@ class AdvancedTrayIndicator:
         # ⭐ v2.0.11 (user: «в главном меню уберём лишние многоточия»):
         # пункт открывает ОКНО, а не диалог выбора — многоточие тут
         # лишний шум, убрано.
-        mode_settings_item = Gtk.MenuItem(label='🎛 Настройки режима')
+        mode_settings_item = Gtk.MenuItem(label=t('menu.mode_settings'))
         mode_settings_item.connect("activate",
                                    self.show_mode_settings)
         menu.append(mode_settings_item)
@@ -1255,17 +1255,17 @@ class AdvancedTrayIndicator:
         # НАСТОЯЩИМИ Gtk.Switch — кружочек в овальчике, переключение
         # без закрытия, статус обновляется живьём. Текст пункта
         # показывает текущий выбор.
-        engines_item = Gtk.MenuItem(label='⚙ Режимы обхода')
-        engine_names = {'byedpi': 'byedpi (SOCKS)',
-                        'nfqws': 'nfqws (NFQUEUE)',
-                        'snimod': 'snimod (SNI case-mod)',
-                        'bridge': 'DNS-мост (DoT)'}
+        engines_item = Gtk.MenuItem(label=t('menu.engines'))
+        engine_names = {'byedpi': t('engines.name_byedpi'),
+                        'nfqws': t('engines.name_nfqws'),
+                        'snimod': t('engines.name_snimod'),
+                        'bridge': t('engines.name_bridge')}
         eng_now = self._active_engine()
         engines_item.set_label(
-            f"⚙ Режимы обхода  [выбран: "
-            f"{engine_names.get(eng_now, eng_now)}]")
+            t('engines.menu_label').format(
+                name=engine_names.get(eng_now, eng_now)))
         engines_item.set_tooltip_text(
-            'Окно с переключателями-свичами: byedpi ↔ nfqws ↔ snimod')
+            t('engines.window_hint'))
         engines_item.connect("activate", self.show_engines_window)
         menu.append(engines_item)
         # помечаем для синка текста из update_status
@@ -1300,7 +1300,7 @@ class AdvancedTrayIndicator:
         # для разных сетей (user: «переключаться между профилями»)
         try:
             import ciadpi_profiles  # noqa: F401
-            profiles_item = Gtk.MenuItem(label='🗂 Профили')
+            profiles_item = Gtk.MenuItem(label=t('menu.profiles'))
             profiles_item.connect("activate", self.show_profiles_dialog)
             menu.append(profiles_item)
         except ImportError:
@@ -1410,15 +1410,15 @@ class AdvancedTrayIndicator:
         try:
             if status == 'active':
                 status_text = (t('status.running_nfqws') if engine == 'nfqws'
-                               else ('SNI case-mod: работает'
+                               else (t('status.snimod_running')
                                      if engine == 'snimod'
-                                     else ('DNS-мост: работает'
+                                     else (t('status.bridge_running')
                                            if engine == 'bridge'
                                            else t('status.running'))))
                 status_label = (
                     t('status.running_s_nfqws') if engine == 'nfqws'
-                    else ('SNI case-mod: активен' if engine == 'snimod'
-                          else ('DNS-мост: активен' if engine == 'bridge'
+                    else (t('status.snimod_active') if engine == 'snimod'
+                          else (t('status.bridge_active') if engine == 'bridge'
                                 else t('status.running_s'))))
             else:
                 status_text = t('status.stopped')
@@ -1433,8 +1433,8 @@ class AdvancedTrayIndicator:
             if item is not None:
                 try:
                     item.set_label(
-                        f"⚙ Режимы обхода  [выбран: "
-                        f"{names.get(engine, engine)}]")
+                        t('engines.menu_label').format(
+                            name=names.get(engine, engine)))
                 except Exception:
                     pass
 
@@ -2785,84 +2785,27 @@ class AdvancedTrayIndicator:
         подсказкой (как в полном конструкторе byedpi), плюс
         краткий tooltip на самом виджете.
         """
-        # подробные подсказки по полям (кнопка «?»)
+        # подробные подсказки по полям (кнопка «?»);
+        # ⭐ v2.0.14 — через t(): переводятся на лету
         nfq_hints = {
-            '--dpi-desync': (
-                'Метод десинка — КАК искажаем пакеты, чтобы DPI\n'
-                'прова потерял синхронизацию:\n'
-                '  none — не искажать (только фильтры);\n'
-                '  disorder — разрезать и отправить части в\n'
-                '            обратном порядке;\n'
-                '  disorder2 — то же, но части не «в рукопожатии»;\n'
-                '  split — разрезать TCP-поток на позиции;\n'
-                '  split2 — split без второго SYN-ACK;\n'
-                '  fake — поддельный ClientHello перед настоящим;\n'
-                '  fake,split2 / fake,disorder2 — комбинации;\n'
-                '  multisplit — несколько разрезов сразу;\n'
-                '  multidisorder — disorder по нескольким позициям.\n'
-                'Универсального нет: проводу подходит одно,\n'
-                'другому — другое. Ищи «Поиском стратегии».'),
-            '--dpi-desync-split-pos': (
-                'Позиция разреза (split/disorder): на каком байте\n'
-                'пакета резать поток. Цифра — байт от начала данных;\n'
-                'значения с суффиксами: midsld — середина серверного\n'
-                'hello домена, +N/-N — сдвиг от неё.\n'
-                'Классика против SNI-фильтров: 1 (в самом начале\n'
-                'TLS-записи) или midsld+1 (внутри SNI-домена).\n'
-                'Несколько позиций через запятую (для multisplit).'),
-            '--dpi-desync-split-seqovl': (
-                'Перекрытие sequence-номеров (seqovl) при split:\n'
-                'сколько байтов «наслаиваются» при пересборке.\n'
-                'Помогает, когда пров собирает поток обратно и\n'
-                'надо чтобы пересборка была неоднозначной.\n'
-                '0 — выключено; обычно 1–8.'),
-            '--dpi-desync-ttl': (
-                'TTL поддельного (fake) пакета: подделка умирает\n'
-                'на маршрутизаторе прова (не доходит до сервера),\n'
-                'но DPI успевает её увидеть и «довольствуется».\n'
-                'Значение — на 1 больше числа хопов до фильтра\n'
-                'прова (обычно 1–12; узнай трассировкой:\n'
-                'traceroute сайт). Слишком большой — фейк дойдёт\n'
-                'до сервера и сломает соединение.'),
-            '--dpi-desync-autottl': (
-                'Авто-TTL: nfqws сам определяет расстояние до\n'
-                'фильтра и подбирает TTL фейка.\n'
-                '  0 — выключено (по умолчанию);\n'
-                '  1 — включить авто-подбор.\n'
-                'Удобно, если не хочешь считать traceroute; но\n'
-                'иногда ручной TTL работает стабильнее.'),
-            '--dpi-desync-fake-tls': (
-                'Тип fake-пакета для TLS (443):\n'
-                '  0 — не использовать (для не-TLS);\n'
-                '  1 — fake = правдоподобный TLS ClientHello\n'
-                '      (обманывает DPI, который ждёт « handshake»);\n'
-                '  2 — урезанный ClientHello.\n'
-                'Работает в паре с --dpi-desync=fake…,\n'
-                'TTL подделки — --dpi-desync-ttl.'),
-            '--dpi-desync-fooling': (
-                'Фулинг — как обмануть проверку контрольных сумм и\n'
-                'последовательностей, чтобы DPI не отбраковал фейк:\n'
-                '  badsum — неверная TCP-сумма: фейк отбрасывают\n'
-                '           все, кроме DPI (пров пропускает);\n'
-                '  md5sig — TCP MD5 signature (не все ОС)\n'
-                '  badseq — неверный sequence: NAT/DPI игнорируют;\n'
-                '  datanoack / hopbyhop — тонкости IP.\n'
-                'Несколько через запятую. badsum — самый частый.\n'
-                '⚠️ На некоторых провах ломает соединения — если\n'
-                'сайты умерли, попробуй убрать.'),
-            '--dpi-desync-split-seqovl2': (
-                'Перекрытие seq для второго сегмента split2 —\n'
-                'используется вместе с seqovl.'),
+            '--dpi-desync': t('nfq.desync'),
+            '--dpi-desync-split-pos': t('nfq.split_pos'),
+            '--dpi-desync-split-seqovl': t('nfq.seqovl'),
+            '--dpi-desync-ttl': t('nfq.ttl'),
+            '--dpi-desync-autottl': t('nfq.autottl'),
+            '--dpi-desync-fake-tls': t('nfq.fake_tls'),
+            '--dpi-desync-fooling': t('nfq.fooling'),
+            '--dpi-desync-split-seqovl2': t('nfq.seqovl2'),
         }
         # краткие подписи (tooltip на виджете)
         nfq_short = {
-            '--dpi-desync': 'Метод искажения пакетов (нет/universal: disorder/split/fake/multisplit…)',
-            '--dpi-desync-split-pos': 'Позиция разреза (байт от начала; midsld±N — от середины SNI)',
-            '--dpi-desync-split-seqovl': 'Перекрытие sequence при split (0 = выкл)',
-            '--dpi-desync-ttl': 'TTL fake-пакета (умирает на фильтре прова)',
-            '--dpi-desync-autottl': 'Авто-подбор TTL фейка (1 = вкл)',
-            '--dpi-desync-fake-tls': 'Fake-пакет = TLS ClientHello (1 = да)',
-            '--dpi-desync-fooling': 'Фулинг: badsum/md5sig/badseq (через запятую)',
+            '--dpi-desync': t('nfq.desync_s'),
+            '--dpi-desync-split-pos': t('nfq.split_pos_s'),
+            '--dpi-desync-split-seqovl': t('nfq.seqovl_s'),
+            '--dpi-desync-ttl': t('nfq.ttl_s'),
+            '--dpi-desync-autottl': t('nfq.autottl_s'),
+            '--dpi-desync-fake-tls': t('nfq.fake_tls_s'),
+            '--dpi-desync-fooling': t('nfq.fooling_s'),
         }
 
         def parse_nfqws(s):
@@ -2883,14 +2826,14 @@ class AdvancedTrayIndicator:
 
         return self._build_simple_builder(
             fields=[
-                ('--dpi-desync', 'Метод десинка (disorder2/fake,split2/…)',
+                ('--dpi-desync', t('nfq.l_desync'),
                  None, None, None),
-                ('--dpi-desync-split-pos', 'Позиция сплита', 1, 30, 1),
-                ('--dpi-desync-split-seqovl', 'Перекрытие seq (split)', 0, 64, 1),
-                ('--dpi-desync-ttl', 'TTL фейка', 1, 12, 1),
-                ('--dpi-desync-autottl', 'Авто-TTL (1=вкл)', 0, 2, 1),
-                ('--dpi-desync-fake-tls', 'Фейк-TLS (1/2=тип)', 0, 2, 1),
-                ('--dpi-desync-fooling', 'Фулинг (badsum/md5sig/badseq…)',
+                ('--dpi-desync-split-pos', t('nfq.l_split_pos'), 1, 30, 1),
+                ('--dpi-desync-split-seqovl', t('nfq.l_seqovl'), 0, 64, 1),
+                ('--dpi-desync-ttl', t('nfq.l_ttl'), 1, 12, 1),
+                ('--dpi-desync-autottl', t('nfq.l_autottl'), 0, 2, 1),
+                ('--dpi-desync-fake-tls', t('nfq.l_fake_tls'), 0, 2, 1),
+                ('--dpi-desync-fooling', t('nfq.l_fooling'),
                  None, None, None),
             ],
             parse=parse_nfqws, update=update_nfqws,
@@ -2937,8 +2880,7 @@ class AdvancedTrayIndicator:
             if hints and key in hints:
                 q_btn = _ms.Gtk.Button(label='?')
                 q_btn.set_size_request(28, 28)
-                q_btn.set_tooltip_text(
-                    'Подробная подсказка по этому параметру')
+                q_btn.set_tooltip_text(t('ms.q_tooltip'))
                 q_btn.connect(
                     'clicked',
                     lambda b, msg=hints[key]: self._show_param_tip(msg))
@@ -2963,8 +2905,7 @@ class AdvancedTrayIndicator:
                 row.pack_start(sp, False, False, 0)
             box.pack_start(row, False, False, 2)
         hint = _ms.Gtk.Label()
-        hint.set_markup('<small>Изменения сразу пишутся в строку '
-                        'параметров сверху окна.</small>')
+        hint.set_markup(t('ms.live_hint'))
         hint.set_xalign(0)
         box.pack_start(hint, False, False, 4)
         return box
@@ -3001,7 +2942,7 @@ class AdvancedTrayIndicator:
             sys.path.insert(0, str(Path(__file__).resolve().parent))
             import ciadpi_enginectl as ec
 
-        dialog = Gtk.Dialog(title='Режимы обхода DPI', flags=0)
+        dialog = Gtk.Dialog(title=t('engines.title'), flags=0)
         dialog.set_default_size(520, 430)
         self._engines_window = dialog
         content = dialog.get_content_area()
@@ -3009,20 +2950,14 @@ class AdvancedTrayIndicator:
         content.set_margin_start(12); content.set_margin_end(12)
 
         modes = [
-            ('byedpi', 'byedpi — SOCKS5-прокси',
-             'Обходят только приложения с настроенным прокси.\n'
-             'Параметры: «Настройки» в меню трея.'),
-            ('nfqws', 'nfqws — десинки zapret (NFQUEUE)',
-             'Перехват пакетов ВСЕХ приложений: fake/split/disorder.\n'
-             'Самый мощный против SNI/IP-фильтров прова.'),
-            ('snimod', 'snimod — наш SNI case-mod',
-             'Поднимает РЕГИСТР SNI (www.youtube.com →\n'
-             'WWW.YOUTUBE.COM). Пров режет по подстроке в нижнем\n'
-             'регистре, серверу регистр безразличен (RFC 6066).'),
-            ('bridge', 'DNS-мост (DoT) — без движка',
-             'Локальный резолвер 127.0.0.1:53 → 1.1.1.1:853 (TLS).\n'
-             'Чинит NXDOMAIN-блокировку DNS прова. Совместим с любым\n'
-             'движком; отдельно — просто честный DNS.'),
+            ('byedpi', t('engines.title_byedpi'),
+             t('engines.desc_byedpi')),
+            ('nfqws', t('engines.title_nfqws'),
+             t('engines.desc_nfqws')),
+            ('snimod', t('engines.title_snimod'),
+             t('engines.desc_snimod')),
+            ('bridge', t('engines.title_bridge'),
+             t('engines.desc_bridge')),
         ]
 
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -3041,8 +2976,8 @@ class AdvancedTrayIndicator:
         def on_mode_toggled(btn, name):
             if btn.get_active():
                 state['selected'] = name
-                ui_set_status(f'Выбран режим: <b>{name}</b> '
-                              '(запуск — кнопкой ниже)')
+                ui_set_status(
+                    t('engines.selected').format(name=name))
                 # ⭐ ФИКС v2.0.9 (user: «при смене режима окно параметров
                 # от старого режима остаётся — закрыть, чтобы открыли
                 # уже правильное»): гасим окно «Настройки режима», оно
@@ -3106,7 +3041,7 @@ class AdvancedTrayIndicator:
             ev_row.connect('button-press-event',
                            lambda w, e, _rb=rb: _rb.set_active(True)
                            or False)
-            ev_row.set_tooltip_text('Клик — выбрать этот режим')
+            ev_row.set_tooltip_text(t('engines.click_hint'))
             box.pack_start(ev_row, False, False, 2)
             radio_buttons[name] = rb
             # тест-хуки: прямые ссылки на radio и статус-лейблы
@@ -3123,10 +3058,10 @@ class AdvancedTrayIndicator:
         # --- кнопки: действуют на ВЫБРАННЫЙ режим ---
         btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
                           spacing=8)
-        btn_start = Gtk.Button(label='▶ Запустить')
-        btn_stop = Gtk.Button(label='⏹ Остановить')
-        btn_restart = Gtk.Button(label='↻ Перезапустить')
-        btn_close = Gtk.Button(label='Закрыть')
+        btn_start = Gtk.Button(label=t('engines.start'))
+        btn_stop = Gtk.Button(label=t('engines.stop'))
+        btn_restart = Gtk.Button(label=t('engines.restart'))
+        btn_close = Gtk.Button(label=t('btn.close'))
 
         def _busy(on):
             for b in (btn_start, btn_stop, btn_restart):
@@ -3151,7 +3086,8 @@ class AdvancedTrayIndicator:
                 def done():
                     _busy(False)
                     ui_set_status(('✅ ' if ok else '❌ ') +
-                                  f'{verb} {target}: ' + (msg or 'готово'))
+                                  f'{verb} {target}: ' +
+                                  (msg or t('engines.done')))
                     GLib.idle_add(self.update_status)
                     GLib.idle_add(self.rebuild_menu)
                     return False
@@ -3161,24 +3097,27 @@ class AdvancedTrayIndicator:
         def on_start(btn):
             target = state['selected']
             if target == 'bridge':
-                _run_op(ec.start_bridge, 'запуск')
+                _run_op(ec.start_bridge, t('engines.verb_start'))
             else:
-                _run_op(lambda: ec.start_engine(target), 'запуск')
+                _run_op(lambda: ec.start_engine(target),
+                        t('engines.verb_start'))
 
         def on_stop(btn):
             target = state['selected']
             if target == 'bridge':
-                _run_op(ec.stop_bridge, 'стоп')
+                _run_op(ec.stop_bridge, t('engines.verb_stop'))
             else:
-                _run_op(lambda: ec.stop_engine(target), 'стоп')
+                _run_op(lambda: ec.stop_engine(target),
+                        t('engines.verb_stop'))
 
         def on_restart(btn):
             target = state['selected']
             if target == 'bridge':
                 _run_op(lambda: (ec.stop_bridge(), ec.start_bridge())[1],
-                        'перезапуск')
+                        t('engines.verb_restart'))
             else:
-                _run_op(lambda: ec.restart_engine(target), 'перезапуск')
+                _run_op(lambda: ec.restart_engine(target),
+                        t('engines.verb_restart'))
 
         btn_start.connect('clicked', on_start)
         btn_stop.connect('clicked', on_stop)
@@ -3215,9 +3154,9 @@ class AdvancedTrayIndicator:
                         active = ec.is_active(n)
                         if n == 'bridge':
                             pass
-                        txt = ('<span foreground="#2e7d32">● активен</span>'
+                        txt = (t('engines.active_html')
                                if active else
-                               '<span foreground="#888">○ остановлен</span>')
+                               t('engines.inactive_html'))
                     except Exception:
                         txt = '<small>?</small>'
                     GLib.idle_add(lbl.set_markup,
@@ -3260,7 +3199,7 @@ class AdvancedTrayIndicator:
             import ciadpi_profiles
         pm = ciadpi_profiles.ProfileManager()
 
-        dialog = Gtk.Dialog(title='Профили настроек', flags=0)
+        dialog = Gtk.Dialog(title=t('profiles.title'), flags=0)
         dialog.set_default_size(480, 420)
         content = dialog.get_content_area()
         content.set_margin_top(10); content.set_margin_bottom(10)
@@ -3275,11 +3214,11 @@ class AdvancedTrayIndicator:
         list_tree = Gtk.TreeView(model=store)
         list_tree.set_headers_visible(False)
         renderer = Gtk.CellRendererText()
-        col = Gtk.TreeViewColumn('Профиль', renderer, text=0)
+        col = Gtk.TreeViewColumn(t('menu.profiles'), renderer, text=0)
         list_tree.append_column(col)
         renderer2 = Gtk.CellRendererText()
         renderer2.set_property('foreground', 'gray')
-        col2 = Gtk.TreeViewColumn('Инфо', renderer2, text=1)
+        col2 = Gtk.TreeViewColumn(t('profiles.col_info'), renderer2, text=1)
         list_tree.append_column(col2)
         scroll = Gtk.ScrolledWindow()
         scroll.set_vexpand(True)
@@ -3290,9 +3229,11 @@ class AdvancedTrayIndicator:
             store.clear()
             active = pm.active_profile()
             for name, meta in pm.list_profiles():
-                info = (f"[{meta.get('engine', '?')} · мост:"
-                        f"{meta.get('bridge', '?')}]"
-                        f"{' ← активный' if name == active else ''}")
+                info = (t('profiles.info').format(
+                            engine=meta.get('engine', '?'),
+                            bridge=meta.get('bridge', '?'))
+                        + (t('profiles.active_mark')
+                           if name == active else ''))
                 store.append([name, info])
         refresh_list()
 
@@ -3304,16 +3245,16 @@ class AdvancedTrayIndicator:
         name_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
                            spacing=8)
         name_entry = Gtk.Entry()
-        name_entry.set_placeholder_text('Имя профиля (напр. «Дом»)')
-        btn_save = Gtk.Button(label='💾 Сохранить текущее как…')
+        name_entry.set_placeholder_text(t('profiles.name_hint'))
+        btn_save = Gtk.Button(label=t('profiles.save_current'))
         name_row.pack_start(name_entry, True, True, 0)
         name_row.pack_start(btn_save, False, False, 0)
 
         btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
                           spacing=8)
-        btn_apply = Gtk.Button(label='▶ Применить')
-        btn_delete = Gtk.Button(label='🗑 Удалить')
-        btn_close = Gtk.Button(label='Закрыть')
+        btn_apply = Gtk.Button(label=t('profiles.apply'))
+        btn_delete = Gtk.Button(label=t('profiles.delete'))
+        btn_close = Gtk.Button(label=t('btn.close'))
 
         def on_save(btn):
             name = name_entry.get_text()
@@ -3330,10 +3271,12 @@ class AdvancedTrayIndicator:
         def on_apply(btn):
             name = chosen_name()
             if not name:
-                status_lbl.set_markup('<small>❌ выберите профиль в списке</small>')
+                status_lbl.set_markup(
+                    f'<small>{t("profiles.choose")}</small>')
                 return
-            status_lbl.set_markup(
-                f'<small>⏳ Применяю «{GLib.markup_escape_text(name)}»…</small>')
+            applying_txt = GLib.markup_escape_text(
+                t('profiles.applying').format(name=name))
+            status_lbl.set_markup(f'<small>{applying_txt}</small>')
 
             def worker():
                 ok, msg = pm.apply_profile(name)
@@ -3383,7 +3326,8 @@ class AdvancedTrayIndicator:
         def on_delete(btn):
             name = chosen_name()
             if not name:
-                status_lbl.set_markup('<small>❌ выберите профиль в списке</small>')
+                status_lbl.set_markup(
+                    f'<small>{t("profiles.choose")}</small>')
                 return
             ok, msg = pm.delete_profile(name)
             status_lbl.set_markup(
@@ -3401,13 +3345,7 @@ class AdvancedTrayIndicator:
         btn_box.pack_end(btn_close, False, False, 0)
 
         hint = Gtk.Label()
-        hint.set_markup('<small>Профиль хранит ПОЛНОЕ состояние: выбранный\n'
-                       'режим, параметры всех движков, недавние и избранные\n'
-                       'параметры, белый список, настройки приложения и язык.\n'
-                       '«Сохранить» снимает снимок текущего состояния и делает\n'
-                       'профиль активным; «Применить» переключает на него\n'
-                       'целиком. Пока профиль активен — все изменения пишутся\n'
-                       'в него автоматически.</small>')
+        hint.set_markup(t('profiles.hint'))
         hint.set_xalign(0)
 
         box.pack_start(hint, False, False, 0)
@@ -4261,7 +4199,7 @@ class AdvancedTrayIndicator:
         content.set_margin_end(8)
 
         head = Gtk.Label()
-        head.set_markup(f'<b>Обновление {target_name}</b> — этапы и команды')
+        head.set_markup(t('upd.head').format(target=target_name))
         head.set_xalign(0)
         content.pack_start(head, False, False, 4)
 
@@ -4287,7 +4225,7 @@ class AdvancedTrayIndicator:
 
         btn_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
                           spacing=8)
-        btn_close = Gtk.Button(label='Закрыть')
+        btn_close = Gtk.Button(label=t('btn.close'))
         btn_close.set_sensitive(False)   # активен только в конце
         btn_row.pack_end(btn_close, False, False, 0)
         content.pack_start(btn_row, False, False, 4)
@@ -4319,7 +4257,7 @@ class AdvancedTrayIndicator:
                 ins = b.get_end_iter()
                 line = ('\n✅ ' if ok else '\n❌ ') + summary + '\n'
                 b.insert_with_tags(ins, line, end_tag)
-                b.insert(ins, '\n— Нажмите «Закрыть», чтобы завершить —\n')
+                b.insert(ins, '\n' + t('upd.press_close') + '\n')
                 btn_close.set_sensitive(True)
                 btn_close.grab_focus()
                 state['done'] = True
@@ -4351,17 +4289,14 @@ class AdvancedTrayIndicator:
         приложения».
         """
         dlg, log, finish = self._open_update_console(
-            'Обновление byedpi', 'byedpi (~/byedpi, ветка 17)')
+            t('upd.title_byedpi'), t('upd.target_byedpi'))
 
         def update_thread():
             byedpi_dir, binary = self._locate_ciadpi(os.environ.get('USER'))
             backup = (byedpi_dir / 'ciadpi.bak') if byedpi_dir else None
 
             if not byedpi_dir or not binary:
-                finish(False, 'git-каталог ~/byedpi не найден — '
-                              'обновление доступно только для git-'
-                              'установки (пакетной — через пакетный '
-                              'менеджер)')
+                finish(False, t('upd.no_dir_byedpi'))
                 return
 
             # 1) Проверка репозитория
@@ -4371,8 +4306,8 @@ class AdvancedTrayIndicator:
                 capture_output=True, text=True, timeout=10
             )
             if remotes.returncode != 0:
-                log('не git-репозиторий — обновление невозможно', 'err')
-                finish(False, '~/byedpi не является git-репозиторием')
+                log(t('upd.no_git'), 'err')
+                finish(False, t('upd.not_git_byedpi'))
                 return
             log(remotes.stdout.strip(), 'dim')
 
@@ -4381,16 +4316,16 @@ class AdvancedTrayIndicator:
                 ['git', '-C', str(byedpi_dir), 'rev-parse', '--short', 'HEAD'],
                 capture_output=True, text=True, timeout=10
             ).stdout.strip()
-            log(f'текущая версия: {old_hash}', 'dim')
+            log(t('upd.version').format(hash=old_hash), 'dim')
 
             # 3) Резервная копия текущего бинарника (для отката)
             try:
                 if binary.exists():
                     import shutil as _shutil
                     _shutil.copy2(binary, backup)
-                    log(f'бэкап бинарника: {backup}', 'dim')
+                    log(t('upd.backup').format(path=backup), 'dim')
             except Exception as e:
-                log(f'⚠️ не удалось сделать бэкап: {e}', 'dim')
+                log(t('upd.backup_fail').format(err=e), 'dim')
 
             # 4) Останавливаем сервис перед заменой бинарника
             log('$ systemctl stop ciadpi.service')
@@ -4413,10 +4348,10 @@ class AdvancedTrayIndicator:
                 ).stdout.strip()
 
                 if new_hash == old_hash and binary.exists():
-                    log('уже последняя версия', 'ok')
+                    log(t('upd.already_latest'), 'ok')
                     self._systemctl('start', 'ciadpi.service')
-                    finish(True, f'byedpi уже последней версии ({old_hash}) — '
-                                 'сервис возвращён в работу')
+                    finish(True, t('upd.done_latest_byedpi').format(
+                        hash=old_hash))
                     return
 
                 # 6) Сборка
@@ -4431,9 +4366,10 @@ class AdvancedTrayIndicator:
                 if build.returncode != 0 or not binary.exists():
                     err = (build.stderr or build.stdout or '')[-400:]
                     log(err, 'err')
-                    raise RuntimeError(f"Сборка не удалась: {err}")
+                    raise RuntimeError(
+                        t('upd.build_fail').format(err=err))
 
-                log('сборка успешна', 'ok')
+                log(t('upd.build_ok'), 'ok')
 
                 # 7) Перезапуск сервиса с прежними параметрами
                 log('$ systemctl start ciadpi.service')
@@ -4445,23 +4381,22 @@ class AdvancedTrayIndicator:
                 ).stdout.strip() == 'active'
 
                 if active:
-                    msg = f'byedpi обновлён: {old_hash} → {new_hash}. Сервис работает.'
-                    log(msg, 'ok')
-                    finish(True, f'{old_hash} → {new_hash}, сервис активен')
+                    log(t('upd.service_active'), 'ok')
+                    finish(True, t('upd.done_ok').format(
+                        old=old_hash, new=new_hash))
                 else:
-                    log('сервис не запустился — откат бинарника', 'err')
+                    log(t('upd.rollback_log'), 'err')
                     if backup.exists():
                         import shutil as _shutil
                         _shutil.copy(backup, binary)
                     self._systemctl('start', 'ciadpi.service')
-                    finish(False, f'обновлён до {new_hash}, но сервис не '
-                                  'стартовал — выполнен откат, проверьте '
-                                  'логи (journalctl -u ciadpi.service)')
+                    finish(False, t('upd.done_rollback').format(
+                        new=new_hash))
             except Exception as e:
-                log(f'ОШИБКА: {e}', 'err')
+                log(t('upd.error').format(err=e), 'err')
                 self._systemctl('start', 'ciadpi.service')
-                finish(False, f'обновление прервано: {str(e)[:180]} — '
-                              'сервис возвращён в работу')
+                finish(False, t('upd.done_interrupt').format(
+                    err=str(e)[:180]))
 
         threading.Thread(target=update_thread, daemon=True).start()
 
@@ -4473,7 +4408,7 @@ class AdvancedTrayIndicator:
         если он был активен. Лог — в консольное окно этапов.
         """
         dlg, log, finish = self._open_update_console(
-            'Обновление nfqws (zapret)', 'nfqws (~/zapret/nfq)')
+            t('upd.title_nfqws'), t('upd.target_nfqws'))
 
         def update_thread():
             zapret_dir = Path.home() / 'zapret'
@@ -4481,8 +4416,7 @@ class AdvancedTrayIndicator:
             backup = zapret_dir / 'nfq' / 'nfqws.bak'
 
             if not zapret_dir.exists():
-                finish(False, '~/zapret не найден — nfqws-режим '
-                              'не установлен на этой машине')
+                finish(False, t('upd.no_dir_zapret'))
                 return
 
             # 1) Проверка репозитория
@@ -4492,8 +4426,8 @@ class AdvancedTrayIndicator:
                 capture_output=True, text=True, timeout=10
             )
             if remotes.returncode != 0:
-                log('не git-репозиторий — обновление невозможно', 'err')
-                finish(False, '~/zapret не является git-репозиторием')
+                log(t('upd.no_git'), 'err')
+                finish(False, t('upd.not_git_zapret'))
                 return
             log(remotes.stdout.strip(), 'dim')
 
@@ -4502,16 +4436,16 @@ class AdvancedTrayIndicator:
                 ['git', '-C', str(zapret_dir), 'rev-parse', '--short', 'HEAD'],
                 capture_output=True, text=True, timeout=10
             ).stdout.strip()
-            log(f'текущая версия: {old_hash}', 'dim')
+            log(t('upd.version').format(hash=old_hash), 'dim')
 
             # 3) Бэкап бинарника
             try:
                 if nfqws_bin.exists():
                     import shutil as _shutil
                     _shutil.copy2(nfqws_bin, backup)
-                    log(f'бэкап бинарника: {backup}', 'dim')
+                    log(t('upd.backup').format(path=backup), 'dim')
             except Exception as e:
-                log(f'⚠️ не удалось сделать бэкап: {e}', 'dim')
+                log(t('upd.backup_fail').format(err=e), 'dim')
 
             # 4) Стоп сервиса (если активен)
             was_active = False
@@ -4526,7 +4460,7 @@ class AdvancedTrayIndicator:
                     import ciadpi_enginectl as ec
                     ec.stop_engine('nfqws')
                 except Exception as e:
-                    log(f'⚠️ стоп: {e}', 'dim')
+                    log(t('upd.stop_fail').format(err=e), 'dim')
 
             try:
                 # 5) git pull
@@ -4545,15 +4479,16 @@ class AdvancedTrayIndicator:
                 ).stdout.strip()
 
                 if new_hash == old_hash and nfqws_bin.exists():
-                    log('уже последняя версия', 'ok')
+                    log(t('upd.already_latest'), 'ok')
                     if was_active:
                         log('$ systemctl start ciadpi-nfqws.service')
                         try:
                             import ciadpi_enginectl as ec
                             ec.start_engine('nfqws')
                         except Exception as e:
-                            log(f'⚠️ старт: {e}', 'dim')
-                    finish(True, f'zapret уже последней версии ({old_hash})')
+                            log(t('upd.start_fail').format(err=e), 'dim')
+                    finish(True, t('upd.done_latest_zapret').format(
+                        hash=old_hash))
                     return
 
                 # 6) Сборка nfqws
@@ -4567,18 +4502,20 @@ class AdvancedTrayIndicator:
                 if build.returncode != 0 or not nfqws_bin.exists():
                     err = (build.stderr or build.stdout or '')[-400:]
                     log(err, 'err')
-                    raise RuntimeError(f"Сборка nfqws не удалась: {err}")
+                    raise RuntimeError(
+                        t('upd.build_fail_nfqws').format(err=err))
 
-                log('сборка nfqws успешна', 'ok')
+                log(t('upd.build_nfqws_ok'), 'ok')
                 # копируем в binaries/my (куда смотрит менеджер)
                 try:
                     binaries_dir = zapret_dir / 'binaries' / 'my'
                     if binaries_dir.exists():
                         import shutil as _shutil
                         _shutil.copy2(nfqws_bin, binaries_dir / 'nfqws')
-                        log(f'копия: {binaries_dir}/nfqws', 'dim')
+                        log(t('upd.copy').format(
+                            path=f'{binaries_dir}/nfqws'), 'dim')
                 except Exception as e:
-                    log(f'⚠️ копия в binaries/my: {e}', 'dim')
+                    log(t('upd.copy_fail').format(err=e), 'dim')
 
                 # 7) Рестарт, если был активен
                 if was_active:
@@ -4587,7 +4524,7 @@ class AdvancedTrayIndicator:
                         import ciadpi_enginectl as ec
                         ec.start_engine('nfqws')
                     except Exception as e:
-                        log(f'⚠️ старт: {e}', 'dim')
+                        log(t('upd.start_fail').format(err=e), 'dim')
                     time.sleep(2)
                     try:
                         import ciadpi_enginectl as ec
@@ -4598,14 +4535,14 @@ class AdvancedTrayIndicator:
                     active = False
 
                 if not was_active:
-                    finish(True, f'zapret {old_hash} → {new_hash} — '
-                                  'nfqws собран (сервис не был активен)')
+                    finish(True, t('upd.done_zapret_inactive').format(
+                        old=old_hash, new=new_hash))
                 elif active:
-                    log('сервис активен', 'ok')
-                    finish(True, f'zapret {old_hash} → {new_hash} — '
-                                  'nfqws обновлён, сервис активен')
+                    log(t('upd.service_active'), 'ok')
+                    finish(True, t('upd.done_zapret_ok').format(
+                        old=old_hash, new=new_hash))
                 else:
-                    log('сервис не поднялся — откат', 'err')
+                    log(t('upd.rollback_log_zapret'), 'err')
                     if backup.exists():
                         import shutil as _shutil
                         _shutil.copy(backup, nfqws_bin)
@@ -4613,19 +4550,20 @@ class AdvancedTrayIndicator:
                             import ciadpi_enginectl as ec
                             ec.start_engine('nfqws')
                         except Exception as e:
-                            log(f'⚠️ откат-старт: {e}', 'dim')
-                    finish(False, f'собран {new_hash}, но сервис не '
-                                  'поднялся — откат, проверьте логи')
+                            log(t('upd.rollback_start').format(err=e), 'dim')
+                    finish(False, t('upd.done_zapret_rollback').format(
+                        new=new_hash))
 
             except Exception as e:
-                log(f'ОШИБКА: {e}', 'err')
+                log(t('upd.error').format(err=e), 'err')
                 if was_active:
                     try:
                         import ciadpi_enginectl as ec
                         ec.start_engine('nfqws')
                     except Exception:
                         pass
-                finish(False, f'обновление прервано: {str(e)[:180]}')
+                finish(False, t('upd.done_interrupt_zapret').format(
+                    err=str(e)[:180]))
 
         threading.Thread(target=update_thread, daemon=True).start()
 
@@ -5181,7 +5119,7 @@ class AdvancedTrayIndicator:
         auto_frame.add(auto_box)
 
         # --- ⭐ v2.0.11: Обновление движков (2 кнопки) ---
-        upd_frame = Gtk.Frame(label='Обновление движков')
+        upd_frame = Gtk.Frame(label=t('app.updates_frame'))
         upd_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         upd_box.set_margin_top(8)
         upd_box.set_margin_bottom(8)
@@ -5189,25 +5127,17 @@ class AdvancedTrayIndicator:
         upd_box.set_margin_end(8)
 
         upd_hint = Gtk.Label()
-        upd_hint.set_markup(
-            '<small>Обновление из git без переустановки: git pull → '
-            'сборка → рестарт сервиса.\nКаждое обновление открывает '
-            'консольное окно с этапами и командами — по завершении '
-            'оно ждёт нажатия «Закрыть».</small>')
+        upd_hint.set_markup(t('app.updates_hint'))
         upd_hint.set_xalign(0)
         upd_hint.set_line_wrap(True)
 
         upd_btn_row = Gtk.Box(
             orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        btn_upd_byedpi = Gtk.Button(label='⬆️ Обновить byedpi')
-        btn_upd_byedpi.set_tooltip_text(
-            'git pull в ~/byedpi (ветка 17), пересборка бинарника '
-            'ciadpi, рестарт ciadpi.service с прежними параметрами')
+        btn_upd_byedpi = Gtk.Button(label=t('app.update_byedpi'))
+        btn_upd_byedpi.set_tooltip_text(t('app.update_byedpi_hint'))
         btn_upd_byedpi.connect('clicked', self.update_byedpi)
-        btn_upd_zapret = Gtk.Button(label='⬆️ Обновить nfqws (запрет)')
-        btn_upd_zapret.set_tooltip_text(
-            'git pull в ~/zapret, пересборка nfq/nfqws, рестарт '
-            'ciadpi-nfqws.service с прежними параметрами')
+        btn_upd_zapret = Gtk.Button(label=t('app.update_nfqws'))
+        btn_upd_zapret.set_tooltip_text(t('app.update_nfqws_hint'))
         btn_upd_zapret.connect('clicked', self.update_zapret)
         upd_btn_row.pack_start(btn_upd_byedpi, True, True, 0)
         upd_btn_row.pack_start(btn_upd_zapret, True, True, 0)
@@ -5225,7 +5155,7 @@ class AdvancedTrayIndicator:
 
         # ⭐ v2.0.11: сохранение — по кнопке «Сохранить», не при
         # любом закрытии (пользователь может просто посмотреть).
-        btn_save = Gtk.Button(label='💾 Сохранить')
+        btn_save = Gtk.Button(label=t('app.save'))
         btn_save.connect('clicked', lambda b: _save_settings())
 
         save_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,

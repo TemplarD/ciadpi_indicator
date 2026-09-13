@@ -32,15 +32,28 @@ import gi
 gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk, GLib
 
+# ⭐ v2.0.14: локализация RU/EN (окна настроек режима)
+try:
+    from ciadpi_i18n import t
+    I18N_OK = True
+except ImportError:
+    I18N_OK = False
+    def t(key):
+        return key.split('.')[-1].replace('_', ' ')
+
 
 MODES = ('byedpi', 'nfqws', 'snimod', 'bridge')
 
-MODE_TITLES = {
-    'byedpi': 'byedpi — SOCKS5-прокси',
-    'nfqws': 'nfqws — десинки zapret',
-    'snimod': 'snimod — наш SNI case-mod',
-    'bridge': 'DNS-мост (DoT)',
-}
+# ⭐ v2.0.14: названия режимов — через t() (язык меняется на лету)
+def MODE_TITLES_get(mode):
+    return {
+        'byedpi': t('ms.title_byedpi'),
+        'nfqws': t('ms.title_nfqws'),
+        'snimod': t('ms.title_snimod'),
+        'bridge': t('ms.title_bridge'),
+    }.get(mode, mode)
+
+MODE_TITLES = {}   # совместимость (словарь-пустышка)
 
 # Примеры-дефолты по режимам (дефолт НЕ вытесняется из истории)
 MODE_DEFAULTS = {
@@ -82,7 +95,10 @@ class ModeSettingsWindow:
     _instance = None
 
     # ⭐ v2.0.11: подробные справки для конструкторов snimod/мост
-    HINT_UPSTREAM = (
+    # ⭐ v2.0.14: HINT_* — функции от языка; совместимость через property ниже
+    def _hint_upstream():
+        return t('ms.hint_upstream')
+    HINT_UPSTREAM_STATIC = (
         'Upstream — DNS-over-TLS сервер, куда мост шлёт запросы\n'
         'вместо провайдерского DNS:\n'
         '  1.1.1.1 — Cloudflare (cloudflare-dns.com), быстрый;\n'
@@ -91,7 +107,9 @@ class ModeSettingsWindow:
         'Порт 853 (DoT) шифруется TLS — пров не может подменить\n'
         'ответы (только совсем заблокировать порт).\n'
         'Проверить живость: ping 1.1.1.1 и «Search» в этом окне.')
-    HINT_TLSNAME = (
+    def _hint_tlsname():
+        return t('ms.hint_tlsname')
+    HINT_TLSNAME_STATIC = (
         'Имя TLS-сертификата (server_hostname) — как мост проверяет\n'
         'подлинность upstream: сертификат сервера должен быть\n'
         'выписан на это имя.\n'
@@ -127,7 +145,7 @@ class ModeSettingsWindow:
         """⭐ v2.0.11: диалог подробной подсказки (кнопки «?» в
         конструкторах snimod/моста — справка по месту, как у
         byedpi/nfqws)."""
-        dialog = Gtk.Dialog(title='Подсказка по параметру', flags=0)
+        dialog = Gtk.Dialog(title=t('ms.tip_title'), flags=0)
         dialog.add_buttons('ОК', Gtk.ResponseType.OK)
         dialog.set_default_size(520, 300)
         content = dialog.get_content_area()
@@ -152,7 +170,7 @@ class ModeSettingsWindow:
         """Кнопка «?» с подсказкой (для конструкторов моста/snimod)."""
         btn = Gtk.Button(label='?')
         btn.set_size_request(28, 28)
-        btn.set_tooltip_text('Подробная подсказка по этому параметру')
+        btn.set_tooltip_text(t('ms.q_tooltip'))
         btn.connect('clicked', lambda b: self._show_tip(message))
         return btn
 
@@ -290,8 +308,9 @@ class ModeSettingsWindow:
     def _build(self):
         mode = self.tray._active_engine()
 
-        dlg = Gtk.Dialog(title=f'Настройки режима — {MODE_TITLES.get(mode, mode)}',
-                         flags=0)
+        dlg = Gtk.Dialog(
+            title=t('ms.title').format(mode=MODE_TITLES_get(mode)),
+            flags=0)
         dlg.set_default_size(780, 580)
         self.dialog = dlg
 
@@ -305,8 +324,7 @@ class ModeSettingsWindow:
         head = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         mode_lbl = Gtk.Label()
         mode_lbl.set_markup(
-            f'<b>Режим:</b> {MODE_TITLES.get(mode, mode)}  '
-            '<small>(сменить — «Режимы обхода» в меню трея)</small>')
+            t('ms.mode_label').format(mode=MODE_TITLES_get(mode)))
         mode_lbl.set_xalign(0)
         head.pack_start(mode_lbl, False, False, 0)
 
@@ -318,12 +336,12 @@ class ModeSettingsWindow:
         entry_row.pack_start(self.params_entry, True, True, 0)
         # ⭐ v2.0.12: M+ у текущего параметра — запомнить в избранное
         btn_fav = self._fav_mem_button(
-            'M+', 'M+ — запомнить текущие параметры в избранное')
+            'M+', t('ms.mp_add_current'))
         btn_fav.connect(
             'clicked',
             lambda b: self._on_fav_add_current(mode))
         entry_row.pack_start(btn_fav, False, False, 0)
-        btn_apply_params = Gtk.Button(label='Применить')
+        btn_apply_params = Gtk.Button(label=t('btn.apply'))
         btn_apply_params.connect('clicked',
                                  lambda b: self._on_apply_params(mode))
         entry_row.pack_start(btn_apply_params, False, False, 0)
@@ -370,11 +388,11 @@ class ModeSettingsWindow:
         content.pack_start(self.notebook, True, True, 4)
 
         self.notebook.append_page(self._page_params(mode),
-                                  Gtk.Label(label='Параметры'))
+                                  Gtk.Label(label=t('ms.tab_params')))
         self.notebook.append_page(self._page_builder(mode),
-                                  Gtk.Label(label='Конструктор'))
+                                  Gtk.Label(label=t('ms.tab_builder')))
         self.notebook.append_page(self._page_search(mode),
-                                  Gtk.Label(label='Поиск стратегии'))
+                                  Gtk.Label(label=t('ms.tab_search')))
 
         # переключение вкладок — обновляем подписи под режим
         self.notebook.connect('switch-page',
@@ -414,7 +432,7 @@ class ModeSettingsWindow:
         if default_str:
             row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
                           spacing=6)
-            lbl = Gtk.Label(label='Дефолт:')
+            lbl = Gtk.Label(label=t('ms.default'))
             lbl.set_xalign(0)
             ent = Gtk.Entry()
             ent.set_text(default_str)
@@ -422,12 +440,12 @@ class ModeSettingsWindow:
             ent.set_can_focus(False)
             ent.set_hexpand(True)
             btn = Gtk.Button(label='→')
-            btn.set_tooltip_text('Скопировать в строку параметров')
+            btn.set_tooltip_text(t('ms.to_line'))
             btn.connect('clicked',
                         lambda b: self.params_entry.set_text(default_str))
             # ⭐ v2.0.12: M+ — вернуть дефолт в избранное (если удалён)
             btn_m = self._fav_mem_button(
-                'M+', 'M+ — запомнить дефолт в избранное')
+                'M+', t('ms.mp_add_default'))
             btn_m.connect('clicked',
                          lambda b, s=default_str, mmode=mode:
                          self._on_fav_add_string(mmode, s))
@@ -441,7 +459,7 @@ class ModeSettingsWindow:
         # список с прокруткой, M+ добавить / M− удалить; текущие
         # примеры — первыми запомненными по умолчанию»):
         # старые MODE_EXAMPLES становятся стартовым избранным.
-        fav_frame = Gtk.Frame(label='⭐ Избранное — сохранённые параметры')
+        fav_frame = Gtk.Frame(label=t('ms.favorites'))
         fav_vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL,
                            spacing=3)
         fav_vbox.set_margin_top(4)
@@ -465,8 +483,7 @@ class ModeSettingsWindow:
 
         # 4 последних использованных (по режиму, LRU)
         recent_box_holder = {'box': None}
-        recent_frame = Gtk.Frame(label='Последние использованные '
-                                       '(авто, до 4)')
+        recent_frame = Gtk.Frame(label=t('ms.recent'))
         recent_vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL,
                               spacing=3)
         recent_vbox.set_margin_top(4)
@@ -485,10 +502,7 @@ class ModeSettingsWindow:
         # для bridge — просто пояснение
         if mode == 'bridge':
             info = Gtk.Label()
-            info.set_markup(
-                '<small>У DNS-моста нет строковых параметров запуска:\n'
-                'он слушает 127.0.0.1:53 и форвардит на 1.1.1.1:853 (DoT).\n'
-                'Управление — «Режимы обхода»: Запустить/Остановить.</small>')
+            info.set_markup(t('ms.bridge_info'))
             info.set_xalign(0)
             box.pack_start(info, True, True, 4)
 
@@ -501,8 +515,7 @@ class ModeSettingsWindow:
         items = self._recent_for(mode)
         if not items:
             empty = Gtk.Label()
-            empty.set_markup('<small>пока пусто — после «Применить» '
-                             'параметры появятся здесь</small>')
+            empty.set_markup(f'<small>{t("ms.recent_empty")}</small>')
             empty.set_xalign(0)
             vbox.pack_start(empty, False, False, 2)
         else:
@@ -516,12 +529,12 @@ class ModeSettingsWindow:
                 e.set_hexpand(True)
                 # ⭐ v2.0.12: стрелочка без надписи, текст — в tooltip
                 b = Gtk.Button(label='→')
-                b.set_tooltip_text('Скопировать в строку параметров')
+                b.set_tooltip_text(t('ms.to_line'))
                 b.connect('clicked',
                           lambda btn, s=s: self.params_entry.set_text(s))
                 # ⭐ v2.0.12: M+ — запомнить в избранное
                 m = self._fav_mem_button(
-                    'M+', 'M+ — запомнить в избранное')
+                    'M+', t('ms.mp_add'))
                 m.connect('clicked',
                           lambda btn, s=s, mmode=mode:
                           self._on_fav_add_string(mmode, s))
@@ -538,7 +551,7 @@ class ModeSettingsWindow:
         во всплывающей подсказке (user: «кнопку в строку оставим,
         но сделаем только стрелочку, а надпись — в подсказку»)."""
         btn = Gtk.Button(label='→')
-        btn.set_tooltip_text('Скопировать в строку параметров')
+        btn.set_tooltip_text(t('ms.to_line'))
         btn.set_size_request(34, -1)
         return btn
 
@@ -559,8 +572,7 @@ class ModeSettingsWindow:
         items = self._favorites_for(mode)
         if not items:
             empty = Gtk.Label()
-            empty.set_markup('<small>пусто — нажмите M+ у параметра, '
-                             'чтобы запомнить его здесь</small>')
+            empty.set_markup(f'<small>{t("ms.fav_empty")}</small>')
             empty.set_xalign(0)
             vbox.pack_start(empty, False, False, 2)
         else:
@@ -579,7 +591,7 @@ class ModeSettingsWindow:
                           lambda btn, s=s: self.params_entry.set_text(s))
                 # «M−» — удалить из избранного
                 m = self._fav_mem_button(
-                    'M−', 'M− — убрать из избранного')
+                    'M−', t('ms.mp_del'))
                 m.connect('clicked',
                           lambda btn, s=s, mmode=mode:
                           self._on_fav_remove(mmode, s))
@@ -601,14 +613,13 @@ class ModeSettingsWindow:
         params = (self.params_entry.get_text() or '').strip()
         if not params:
             self.tray.show_notification(
-                'Избранное', 'Строка параметров пуста — нечего '
-                'запоминать')
+                t('ms.fav_title'), t('ms.fav_empty_line'))
             return
         self._favorite_add(mode, params)
         if getattr(self, '_favorites_vbox', None) is not None:
             self._fill_favorites(self._favorites_vbox, mode)
         self.tray.show_notification(
-            'Избранное', 'Параметры запомнены (сверху списка)')
+            t('ms.fav_title'), t('ms.fav_added'))
 
     def _on_fav_add_string(self, mode, params_str):
         """M+ у строки из «Последних» / найденной стратегии:
@@ -617,7 +628,7 @@ class ModeSettingsWindow:
         if getattr(self, '_favorites_vbox', None) is not None:
             self._fill_favorites(self._favorites_vbox, mode)
         self.tray.show_notification(
-            'Избранное', 'Запомнено в избранное')
+            t('ms.fav_title'), t('ms.fav_string_added'))
 
     def _snimod_hosts_widget(self):
         """Редактор хостов snimod (вместо строки параметров).
@@ -626,16 +637,16 @@ class ModeSettingsWindow:
         byedpi/nfqws (user: «для новых двух режимов добавим в их
         небольшой конструктор справку по месту»).
         """
-        frame = Gtk.Frame(label='Хосты SNI case-mod (по одному в строке)')
+        frame = Gtk.Frame(label=t('ms.hosts_frame'))
         # строка-заголовок с кнопкой «?» справа
         head_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
                           spacing=6)
         head_lbl = Gtk.Label()
-        head_lbl.set_markup('<b>Хосты SNI case-mod</b> '
-                           '<small>(по одному в строке)</small>')
+        head_lbl.set_markup(t('ms.hosts_head'))
         head_lbl.set_xalign(0)
         head_row.pack_start(head_lbl, True, True, 0)
-        head_row.pack_start(self._q_button(self.HINT_HOSTS), False, False, 0)
+        head_row.pack_start(
+            self._q_button(t('ms.hint_hosts')), False, False, 0)
         head_row.set_margin_top(4)
         head_row.set_margin_start(6)
         head_row.set_margin_end(6)
@@ -653,12 +664,10 @@ class ModeSettingsWindow:
         buf.set_text('\n'.join(hosts))
         tv = Gtk.TextView(buffer=buf)
         tv.set_monospace(True)
-        tv.set_tooltip_text(
-            'Хосты для SNI case-mod — по одному в строке '
-            '(www.youtube.com станет WWW.YOUTUBE.COM)')
+        tv.set_tooltip_text(t('ms.hosts_tip'))
         sw.add(tv)
 
-        btn = Gtk.Button(label='Сохранить хосты')
+        btn = Gtk.Button(label=t('ms.hosts_save'))
         btn.connect('clicked', lambda b: self._save_snimod_hosts(buf))
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         outer.pack_start(head_row, False, False, 0)
@@ -703,8 +712,7 @@ class ModeSettingsWindow:
         мост тоже используется»: snimod стартует мост через Wants=).
         """
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        frame = Gtk.Frame(
-            label='Настройки DNS-моста (upstream DoT-резолвер)')
+        frame = Gtk.Frame(label=t('ms.bridge_frame'))
         fbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL,
                        spacing=6)
         fbox.set_margin_top(6)
@@ -726,13 +734,14 @@ class ModeSettingsWindow:
         self.bridge_upstream.set_hexpand(True)
         row1.pack_start(lbl1, False, False, 0)
         # ⭐ v2.0.11: справка «?» по месту (как у byedpi/nfqws)
-        row1.pack_start(self._q_button(self.HINT_UPSTREAM), False, False, 0)
+        row1.pack_start(
+            self._q_button(t('ms.hint_upstream')), False, False, 0)
         row1.pack_start(self.bridge_upstream, True, True, 0)
         fbox.pack_start(row1, False, False, 2)
 
         row2 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
                        spacing=6)
-        lbl2 = Gtk.Label(label='Имя TLS-сертификата:')
+        lbl2 = Gtk.Label(label=t('ms.tlsname'))
         lbl2.set_xalign(0)
         self.bridge_tlsname = Gtk.Entry()
         self.bridge_tlsname.set_text(cur.get('tls_name',
@@ -742,20 +751,17 @@ class ModeSettingsWindow:
         self.bridge_tlsname.set_hexpand(True)
         row2.pack_start(lbl2, False, False, 0)
         # ⭐ v2.0.11: справка «?» по месту
-        row2.pack_start(self._q_button(self.HINT_TLSNAME), False, False, 0)
+        row2.pack_start(
+            self._q_button(t('ms.hint_tlsname')), False, False, 0)
         row2.pack_start(self.bridge_tlsname, True, True, 0)
         fbox.pack_start(row2, False, False, 2)
 
-        btn = Gtk.Button(label='Сохранить и перезапустить мост')
+        btn = Gtk.Button(label=t('ms.bridge_save'))
         btn.connect('clicked', self._on_bridge_cfg_apply)
         fbox.pack_start(btn, False, False, 2)
 
         hint = Gtk.Label()
-        hint.set_markup(
-            '<small>Upstream общается по TLS (порт 853) — пров '
-            'не может подменить ответы, только заблокировать.\n'
-            'Если мост не стартует с вашим upstream — попробуйте '
-            '8.8.8.8/dns.google или 9.9.9.9/dns.quad9.</small>')
+        hint.set_markup(t('ms.bridge_hint'))
         hint.set_xalign(0)
         hint.set_line_wrap(True)
         fbox.pack_start(hint, False, False, 4)
@@ -790,9 +796,7 @@ class ModeSettingsWindow:
         if widget is None:
             # запасной вариант: просто пояснение + строка
             info = Gtk.Label()
-            info.set_markup(
-                '<small>Конструктор недоступен для этого режима — '
-                'используйте ручную строку и примеры.</small>')
+            info.set_markup(t('ms.builder_unavailable'))
             info.set_xalign(0)
             box.pack_start(info, True, True, 0)
         else:
@@ -884,10 +888,8 @@ class ModeSettingsWindow:
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
 
         if mode in ('bridge', 'snimod'):
-            txt = ('Поиск параметров не имеет смысла для DNS-моста — '
-                   'он безнастроечный.' if mode == 'bridge' else
-                   'Поиск параметров для snimod не нужен: его стратегия — '
-                   'только список хостов (вкладка «Параметры»).')
+            txt = (t('ms.search_none_bridge') if mode == 'bridge'
+                   else t('ms.search_none_snimod'))
             info = Gtk.Label(label=txt)
             info.set_line_wrap(True)
             box.pack_start(info, True, True, 0)
@@ -895,7 +897,7 @@ class ModeSettingsWindow:
 
         # urls
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        lbl = Gtk.Label(label='URL проверки:')
+        lbl = Gtk.Label(label=t('ms.search_urls'))
         lbl.set_xalign(0)
         self.search_urls = Gtk.Entry()
         self.search_urls.set_text(
@@ -908,7 +910,7 @@ class ModeSettingsWindow:
 
         # лимиты
         row2 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        chk = Gtk.CheckButton(label='Без лимита (до нахождения)')
+        chk = Gtk.CheckButton(label=t('ms.search_unlimited'))
         self.search_unlimited = chk
         spin = Gtk.SpinButton.new_with_range(1, 200, 1)
         spin.set_value(20)
@@ -924,20 +926,20 @@ class ModeSettingsWindow:
         self.search_progress.set_show_text(True)
         box.pack_start(self.search_progress, False, False, 0)
 
-        self.search_status = Gtk.Label(label='Готов к поиску')
+        self.search_status = Gtk.Label(label=t('ms.search_ready'))
         self.search_status.set_xalign(0)
         box.pack_start(self.search_status, False, False, 0)
 
         btn_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
                           spacing=6)
-        b_start = Gtk.Button(label='▶ Найти оптимальные')
-        b_stop = Gtk.Button(label='⏹ Стоп')
+        b_start = Gtk.Button(label=t('ms.search_start'))
+        b_stop = Gtk.Button(label=t('ms.search_stop'))
         b_stop.set_sensitive(False)
-        b_use = Gtk.Button(label='→ в строку параметров')
+        b_use = Gtk.Button(label=t('ms.search_use'))
         b_use.set_sensitive(False)
         # ⭐ v2.0.12: M+ — запомнить НАЙДЕННУЮ стратегию в избранное
         b_fav = self._fav_mem_button(
-            'M+', 'M+ — запомнить найденную стратегию в избранное')
+            'M+', t('ms.mp_add_search'))
         b_fav.set_sensitive(False)
         self.search_btns = {'start': b_start, 'stop': b_stop,
                             'use': b_use, 'fav': b_fav}
@@ -948,7 +950,7 @@ class ModeSettingsWindow:
         box.pack_start(btn_row, False, False, 0)
 
         # лог
-        frame = Gtk.Frame(label='Журнал поиска')
+        frame = Gtk.Frame(label=t('ms.search_log'))
         sw = Gtk.ScrolledWindow()
         sw.set_vexpand(True)
         tv = Gtk.TextView()
@@ -984,7 +986,7 @@ class ModeSettingsWindow:
         urls = [u.strip() for u in self.search_urls.get_text().split()
                 if u.strip()]
         if not urls:
-            self._slog('укажите хотя бы один URL')
+            self._slog(t('ms.log_no_urls'))
             return
         unlimited = self.search_unlimited.get_active()
         max_tests = 0 if unlimited else int(self.search_maxtests.get_value())
@@ -1000,7 +1002,7 @@ class ModeSettingsWindow:
                 from ciadpi_strategy_search import NfqwsStrategySearcher
                 searcher = NfqwsStrategySearcher()
         except Exception as e:
-            self._slog(f'модуль поиска недоступен: {e}')
+            self._slog(t('ms.log_no_module').format(e=e))
             return
 
         self._search_state['running'] = True
@@ -1009,9 +1011,11 @@ class ModeSettingsWindow:
         for b in self.search_btns.values():
             b.set_sensitive(b is self.search_btns['stop'])
         self.search_log_buf.set_text('')
-        self._slog(f'▶ поиск {mode}: '
-                    + ('БЕЗ ЛИМИТА' if unlimited else f'{max_tests} комб.')
-                    + f', URL: {len(urls)}')
+        self._slog(t('ms.log_start').format(
+            mode=mode,
+            limit=(t('ms.log_unlimited') if unlimited
+                   else t('ms.log_combos').format(n=max_tests)),
+            urls=len(urls)))
 
         # pulse-таймер (чистится при закрытии окна)
         def pulse():
@@ -1038,11 +1042,11 @@ class ModeSettingsWindow:
                 elif stage == 'done':
                     best = self._search_state.get('best')
                     if best:
-                        self._slog(f'\n🏆 Лучший результат: {best}')
+                        self._slog('\n' + t('ms.log_best').format(best=best))
                     else:
-                        self._slog('\n😕 Рабочая комбинация не найдена')
+                        self._slog('\n' + t('ms.log_no_result'))
             except Exception as e:
-                self._slog(f'(ошибка вывода: {e})')
+                self._slog(t('ms.log_out_err').format(e=e))
 
         import threading
 
@@ -1051,7 +1055,7 @@ class ModeSettingsWindow:
                 searcher.find_optimal_params(
                     max_tests, urls, on_progress)
             except Exception as e:
-                self._slog(f'⚠️ поиск упал: {e}')
+                self._slog(t('ms.log_crash').format(e=e))
             finally:
                 def done():
                     self._search_state['running'] = False
@@ -1059,7 +1063,7 @@ class ModeSettingsWindow:
                         GLib.source_remove(self._pulse_timer)
                         self._pulse_timer = None
                     self.search_progress.set_fraction(1.0)
-                    self.search_progress.set_text('завершено')
+                    self.search_progress.set_text(t('ms.log_done'))
                     for key, b in self.search_btns.items():
                         try:
                             b.set_sensitive(
@@ -1077,9 +1081,9 @@ class ModeSettingsWindow:
         if s and hasattr(s, 'stop_search'):
             try:
                 s.stop_search()
-                self._slog('⏹ остановка запрошена…')
+                self._slog(t('ms.log_stop'))
             except Exception as e:
-                self._slog(f'стоп: {e}')
+                self._slog(t('ms.log_stop_err').format(e=e))
 
     def _on_search_fav_add(self, mode):
         """⭐ v2.0.12: M+ — найденная стратегия в избранное."""
@@ -1088,24 +1092,22 @@ class ModeSettingsWindow:
             self._favorite_add(mode, best)
             if getattr(self, '_favorites_vbox', None) is not None:
                 self._fill_favorites(self._favorites_vbox, mode)
-            self._slog('⭐ стратегия запомнена в избранное')
+            self._slog(t('ms.log_fav_added'))
         else:
-            self._slog('сначала найдите стратегию («→ в строку» '
-                       'станет активной, когда есть результат)')
+            self._slog(t('ms.log_no_best'))
 
     def _on_search_use(self):
         best = self._search_state.get('best')
         if best:
             self.params_entry.set_text(best)
-            self._slog(f'→ параметры помещены в строку ввода — '
-                       f'нажмите «Применить»')
+            self._slog(t('ms.log_use_hint'))
 
     # ---------------- применение параметров ----------------
 
     def _on_apply_params(self, mode):
         params = (self.params_entry.get_text() or '').strip()
         if mode in ('bridge',):
-            self.tray.show_notification('Мост', 'У DNS-моста нет параметров')
+            self.tray.show_notification(t('ms.bridge_title'), t('ms.bridge_no_params'))
             return
         if mode == 'snimod':
             # для snimod строка = хосты через запятую/пробел
@@ -1130,14 +1132,15 @@ class ModeSettingsWindow:
                             daemon=True).start()
                     self._push_recent('snimod', ' '.join(hosts))
                     self.tray.show_notification(
-                        'snimod', f'Хосты применены: {len(hosts)}')
+                        'snimod', t('ms.hosts_applied').format(
+                            n=len(hosts)))
                 except Exception as e:
                     self.tray.show_notification('Ошибка', str(e)[:120])
             return
 
         # byedpi / nfqws
         if not params:
-            self.tray.show_notification('Пусто', 'Введите параметры')
+            self.tray.show_notification(t('ms.enter_params_title'), t('ms.enter_params'))
             return
 
         def worker():
@@ -1154,7 +1157,7 @@ class ModeSettingsWindow:
                         ok, msg = ec.restart_engine('byedpi'), ''
                         ok = ok if isinstance(ok, bool) else ok[0]
                     else:
-                        ok, msg = True, 'сохранено (сервис не активен)'
+                        ok, msg = True, t('ms.saved_inactive')
                 elif mode == 'nfqws':
                     p = Path.home() / '.config' / 'ciadpi' / 'nfqws.json'
                     cfg = json.loads(p.read_text(encoding='utf-8')) \
@@ -1171,7 +1174,7 @@ class ModeSettingsWindow:
                         ok = r[0] if isinstance(r, tuple) else r
                         msg = r[1] if isinstance(r, tuple) and len(r) > 1 else ''
                     else:
-                        ok, msg = True, 'сохранено (сервис не активен)'
+                        ok, msg = True, t('ms.saved_inactive')
             except Exception as e:
                 ok, msg = False, str(e)
 
@@ -1188,8 +1191,8 @@ class ModeSettingsWindow:
                 except Exception:
                     pass
                 self.tray.show_notification(
-                    'Применено' if ok else 'Ошибка',
-                    (msg or 'параметры сохранены')[:150])
+                    t('ms.apply_ok') if ok else t('ms.apply_fail'),
+                    (msg or t('ms.params_saved'))[:150])
                 return False
             GLib.idle_add(done)
         import threading

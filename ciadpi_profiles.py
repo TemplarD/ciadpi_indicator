@@ -38,6 +38,13 @@ import re
 import time
 from pathlib import Path
 
+# ⭐ v2.0.14: локализация сообщений профиля
+try:
+    from ciadpi_i18n import t
+except ImportError:
+    def t(key):
+        return key.split('.')[-1].replace('_', ' ')
+
 
 class ProfileManager:
     """Создание/загрузка/применение/синк профилей ciadpi."""
@@ -197,7 +204,7 @@ class ProfileManager:
         """
         name = self._safe_name(name)
         if not name:
-            return False, 'имя профиля: 1-32 символа (буквы, цифры, -_)'
+            return False, t('prof.bad_name')
 
         state = self._collect_state(note=note)
         # created_at: сохранить при перезаписи существующего профиля
@@ -210,10 +217,9 @@ class ProfileManager:
         self._write_profile(name, state)
         if make_active:
             self._set_active(name)
-        return True, (f'профиль «{name}» сохранён и активирован '
-                      f'({state["engine"]} + мост:{state["bridge"]}, '
-                      f'память: недавние/избранное/белый список/'
-                      f'настройки)')
+        return True, t('prof.saved').format(
+            name=name, engine=state['engine'],
+            bridge=state['bridge'])
 
     # ---------------- синк активного профиля ----------------
 
@@ -253,17 +259,17 @@ class ProfileManager:
         """Прочитать профиль (без применения). Возвращает (ok, dict|str)."""
         name = self._safe_name(name)
         if not name:
-            return False, 'недопустимое имя'
+            return False, t('prof.bad_name_short')
         f = self.profiles_dir / f'{name}.json'
         if not f.exists():
-            return False, f'профиль «{name}» не найден'
+            return False, t('prof.not_found').format(name=name)
         try:
             data = json.loads(f.read_text(encoding='utf-8'))
             if not isinstance(data, dict):
-                return False, 'профиль бит: не словарь'
+                return False, t('prof.bad_dict')
             return True, data
         except Exception as e:
-            return False, f'профиль бит: {e}'
+            return False, t('prof.corrupt').format(e=e)
 
     def delete_profile(self, name):
         name = self._safe_name(name)
@@ -271,11 +277,11 @@ class ProfileManager:
             return False, 'недопустимое имя'
         f = self.profiles_dir / f'{name}.json'
         if not f.exists():
-            return False, f'профиль «{name}» не найден'
+            return False, t('prof.not_found').format(name=name)
         f.unlink()
         if self.active_profile() == name:
             self._set_active(None)
-        return True, f'профиль «{name}» удалён'
+        return True, t('prof.deleted').format(name=name)
 
     # ---------------- применение ----------------
 
@@ -399,8 +405,8 @@ class ProfileManager:
 
         self._set_active(name)
         final_ok = ok_e
-        return final_ok, f'профиль «{name}»: ' + '; '.join(
-            m for m in msgs if m)
+        return final_ok, (t('prof.applied_prefix').format(name=name)
+                           + '; '.join(m for m in msgs if m))
 
 
 # ---------------- CLI ----------------
